@@ -74,6 +74,10 @@ jobs:
         working-directory: app
         run: npm run check
 
+      - name: Build frontend
+        working-directory: app
+        run: npm run build
+
       - name: Test and lint Rust
         run: |
           cargo test --workspace

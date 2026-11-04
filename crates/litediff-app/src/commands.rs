@@ -424,7 +424,10 @@ mod git_tests {
             &spec(crate::git::WORKTREE),
             blob("live\n", "工作区 · src/main.rs"),
         );
-        assert_eq!(side.path.as_deref(), Some("/tmp/repo/src/main.rs"));
+        assert_eq!(
+            side.path.as_deref().map(PathBuf::from),
+            Some(PathBuf::from("/tmp/repo").join("src/main.rs"))
+        );
         let git = side.git.expect("origin");
         assert!(git.writable);
         assert_eq!(git.short, "工作区");

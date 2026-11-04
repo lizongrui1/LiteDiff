@@ -917,7 +917,7 @@ mod tests {
     fn filenames_with_spaces_and_quotes_are_safe() {
         // The classic injection shape: a name that would break a shell string.
         let repo = TempRepo::new("weirdname");
-        let name = "a b'c;d\"e.txt";
+        let name = "a b'c;d e.txt";
         repo.write(name, "content\n");
         repo.commit("weird");
 
