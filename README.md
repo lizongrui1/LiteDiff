@@ -4,159 +4,162 @@
 
 # LiteDiff
 
-**本地文本 / 代码差异比对工具**
+<p><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
 
-纯 Rust 比对引擎 · Tauri v2 原生窗口 · 无 Electron
+**A local text and code diff tool**
+
+Pure-Rust diff engine · Native Tauri v2 window · No Electron
 
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
-[![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](#系统要求)
-[![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)](#系统要求)
+[![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](#system-requirements)
+[![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)](#system-requirements)
 
 </div>
 
 ---
 
-## 下载
+## Download
 
-从 [Releases](../../releases) 获取安装包。每个版本提供四个文件：
+Get installers from [Releases](../../releases). Each release includes:
 
-| 平台 | 文件 | 说明 |
+| Platform | File | Notes |
 |---|---|---|
-| macOS（Apple Silicon） | `LiteDiff-*-macos-arm64.dmg` | 打开后拖入「应用程序」 |
-| macOS（Intel） | `LiteDiff-*-macos-x64.dmg` | 同上 |
-| Windows 10/11 (x64) | `LiteDiff-*-windows-x64.exe` | 安装程序，**无需管理员权限** |
-| Windows 便携版 | `LiteDiff-*-windows-x64.zip` | 解压即用，无需安装 |
+| macOS (Apple Silicon) | `LiteDiff-*-macos-arm64.dmg` | Open and drag to Applications |
+| macOS (Intel) | `LiteDiff-*-macos-x64.dmg` | Same as above |
+| Windows 10/11 (x64) | `LiteDiff-*-windows-x64.exe` | Installer; **no administrator rights required** |
+| Windows portable | `LiteDiff-*-windows-x64.zip` | Extract and run; no installation needed |
 
-安装说明：
+Installation notes:
 
-- **macOS** —— 安装包已做 ad-hoc 签名，但**没有经过 Apple 公证**（公证需要付费开发者账号）。首次启动若提示「无法验证开发者」，到 *系统设置 → 隐私与安全性 → 仍要打开*；或执行：
+- **macOS** -- the build is ad-hoc signed but **not notarized** (notarization requires a paid Apple Developer account). If the first launch is blocked as an unverified app, open *System Settings -> Privacy & Security -> Open Anyway*, or run:
   ```bash
   xattr -dr com.apple.quarantine /Applications/LiteDiff.app
   ```
-- **Windows** —— 直接运行 `.exe`。安装到当前用户目录，不弹 UAC。若系统缺少 WebView2，安装程序会自动下载。
+- **Windows** -- run the `.exe`. It installs for the current user and does not trigger a UAC prompt. If WebView2 is missing, the installer downloads it automatically.
 
-**校验下载**：每个版本附带 `SHA256SUMS.txt`。
+**Verify your download**: every release includes `SHA256SUMS.txt`.
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt    # macOS
-certutil -hashfile <文件名> SHA256  # Windows
+certutil -hashfile <file> SHA256  # Windows
 ```
 
 ---
 
-## 特性
+## Features
 
-**比对引擎**（纯 Rust，零第三方依赖）
+**Diff engine** (pure Rust, no third-party runtime dependencies)
 
-- 线性空间 Myers（中间蛇 + 前后缀剥离），峰值内存 O(N+M)，最优性由 DP LCS oracle 验证
-- Patience 算法（唯一行锚点 + LIS），大重构下读数更稳
-- 词级行内高亮：`foo_bar` → `foo_baz` 只高亮 `bar`/`baz`，不按字符切碎
-- 支持忽略首尾空白 / 全部空白 / 大小写；CRLF 与 LF 等价
+- Linear-space Myers with middle-snake and common prefix/suffix trimming; peak memory is O(N+M), and optimality is validated against a DP LCS oracle
+- Patience diff with unique-line anchors and LIS for more stable results on large refactors
+- Word-level inline highlighting: `foo_bar` -> `foo_baz` highlights only `bar`/`baz` instead of splitting every character
+- Ignore leading/trailing whitespace, all whitespace, or letter case; CRLF and LF are treated as equivalent
 
-**界面**
+**Interface**
 
-- 界面支持 7 种语言：简体中文 / English / 繁體中文 / 日本語 / Español / Deutsch / Français，可跟随系统
-- 左右分栏 ⇄ 行内统一双视图
-- 固定行高虚拟滚动，3000+ 行只渲染视口附近约 20–40 行
-- 双栏垂直与水平滚动严格同步
-- 长未变动区块自动折叠，可单独展开 / 重新折叠 / 一键全开全收
-- 折叠条显示隐藏的行号区间；行号列按位数自适应
-- Minimap 热力条：canvas 绘制，支持点击、拖动、键盘导航
-- 变更三级标识：行背景 → 行首 3px 标记条 → 词级色块
+- Seven UI languages: Simplified Chinese, English, Traditional Chinese, Japanese, Spanish, German, and French; can follow the system language
+- Side-by-side split view <-> unified inline view
+- Fixed-row-height virtual scrolling; a 3,000+ line file renders only about 20-40 rows around the viewport
+- Strict vertical and horizontal scroll synchronization between panes
+- Automatic collapse of long unchanged regions, with per-region expand/collapse and expand/collapse-all controls
+- Collapsed regions show the hidden line-number range; line-number width adapts to the file size
+- Canvas-rendered minimap with click, drag, and keyboard navigation
+- Three levels of change emphasis: row background, 3 px gutter marker, and word-level highlight
 
-**交互**
+**Interaction**
 
-- 首页两侧直接粘贴内容（`⌘V`），也可拖入文件到某一侧
-- `⌘N` 或「重新输入」回到粘贴界面
-- `⌘S` 原子写回磁盘
-- 深色 / 浅色 / 跟随系统
-- 设置面板（<kbd>⌘</kbd><kbd>,</kbd>）：强调色、红绿色弱配色、着色强度、字号与行距、行号 / 缩略图开关、折叠阈值、首尾空白与大小写
+- Paste directly into either side of the start screen (`Cmd+V`), or drop a file onto one side
+- `Cmd+N` or the re-enter action returns to the paste screen
+- `Cmd+S` performs an atomic write to disk
+- Dark, light, and system themes
+- Settings panel (`Cmd+,`): accent color, red/green color-blind mode, highlight intensity, font size and line height, line numbers and minimap toggles, collapse threshold, leading/trailing whitespace, and case sensitivity
 
-**Git 历史**
+**Git history**
 
-- 打开任意本地仓库，按路径筛选文件
-- 对比「工作区」与任意历史提交，或两个历史提交之间
-- 与历史版本比对时，⌘S 不会写回（历史内容只读）
-  - 通过系统 `git` 命令读取，只调用 `rev-parse` / `log` / `show` / `ls-files`，不会修改仓库
+- Open any local repository and filter files by path
+- Compare the working tree against any revision, or compare two revisions
+- When comparing against history, `Cmd+S` never writes back because historical content is read-only
+- Git data is read through the system `git` command using only `rev-parse`, `log`, `show`, and `ls-files`; the repository is not modified
 
-**对比历史**
+**Comparison history**
 
-- 每次比对自动存到本机，重新打开软件后可以在历史里把当时的对比恢复成一个标签页
-- 按天分组（今天 / 昨天 / 日期），可以单条删除，也可以一次性清空
-- 保留策略在设置里可调：按天数、按条数，各自填 0 表示不限制
-- 只写在本机的应用数据目录，不上传；单条超过 4 MB 的比对不记录（截断会让它变成另一次对比）
+- Every comparison is stored locally and can be restored as a tab after reopening the app
+- Grouped by day (Today / Yesterday / date), with per-item delete and clear-all actions
+- Retention can be configured in Settings by days or by item count; `0` means unlimited
+- Data stays in the local app-data directory and is never uploaded; comparisons larger than 4 MB are not recorded because truncating them would create a different diff
 
-## 快捷键
+## Keyboard Shortcuts
 
-| 按键 | 功能 |
+| Shortcut | Action |
 |---|---|
-| <kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌘</kbd><kbd>[</kbd> | 下一个 / 上一个差异 |
-| <kbd>⌘</kbd><kbd>D</kbd> | 切换左右 / 行内视图 |
-| <kbd>⌘</kbd><kbd>⇧</kbd><kbd>W</kbd> | 忽略首尾空白与换行符 |
-| <kbd>⌘</kbd><kbd>⌥</kbd><kbd>E</kbd> | 展开 / 折叠全部未变动区块 |
-| <kbd>⌘</kbd><kbd>S</kbd> | 保存 |
-| <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>N</kbd> | 新建标签页（回到粘贴界面，已有对比保留） |
-| <kbd>⌘</kbd><kbd>W</kbd> | 关闭当前标签页 |
-| <kbd>⌘</kbd><kbd>,</kbd> | 打开 / 关闭设置 |
-  | <kbd>⌘</kbd><kbd>G</kbd> | 打开 / 关闭 Git 历史 |
-  | <kbd>⌘</kbd><kbd>Y</kbd> | 打开 / 关闭对比历史 |
-## 从源码构建
+| <kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌘</kbd><kbd>[</kbd> | Next / previous change |
+| <kbd>⌘</kbd><kbd>D</kbd> | Toggle split / inline view |
+| <kbd>⌘</kbd><kbd>⇧</kbd><kbd>W</kbd> | Ignore leading/trailing whitespace and line endings |
+| <kbd>⌘</kbd><kbd>⌥</kbd><kbd>E</kbd> | Expand / collapse all unchanged regions |
+| <kbd>⌘</kbd><kbd>S</kbd> | Save |
+| <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>N</kbd> | New tab (return to paste screen while keeping existing comparisons) |
+| <kbd>⌘</kbd><kbd>W</kbd> | Close current tab |
+| <kbd>⌘</kbd><kbd>,</kbd> | Open / close Settings |
+| <kbd>⌘</kbd><kbd>G</kbd> | Open / close Git history |
+| <kbd>⌘</kbd><kbd>Y</kbd> | Open / close comparison history |
 
-需要 Rust 1.75+ 与 Node 18+。
+## Build from Source
+
+Requires Rust 1.75+ and Node 18+.
 
 ```bash
-# 依赖
+# Dependencies
 cd app && npm install && cd ..
 
-# 测试
+# Tests
 cargo test                # Rust
-cd app && npm test        # 前端
+cd app && npm test        # Frontend
 
-# 打包 macOS：产出 .app 与 .dmg
+# Package for macOS: produces .app and .dmg
 ./scripts/package-macos.sh
-SKIP_DMG=1 ./scripts/package-macos.sh   # 只要 .app，本地迭代更快
+SKIP_DMG=1 ./scripts/package-macos.sh   # .app only; faster for local iteration
 
-# 打包 Windows：产出 NSIS 安装包与便携 zip（在 Windows 上执行）
+# Package for Windows: produces an NSIS installer and portable zip (run on Windows)
 powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
 ```
 
-发布由 [.github/workflows/release.yml](.github/workflows/release.yml) 完成：推送 `v*` 标签后，在 macOS（arm64 与 x64）和 Windows 上分别构建，产物挂到一个**草稿** release 上，附 `SHA256SUMS.txt`，由人工确认后发布。
+Releases are built by [.github/workflows/release.yml](.github/workflows/release.yml). Pushing a `v*` tag builds on macOS (arm64 and x64) and Windows, attaches the artifacts and `SHA256SUMS.txt` to a **draft** release, and waits for manual confirmation before publishing.
 
-开发模式需两个终端：`cd app && npm run dev` 与 `cargo run -p litediff-app`。
+For development, run the app in two terminals: `cd app && npm run dev` and `cargo run -p litediff-app`.
 
-## 系统要求
+## System Requirements
 
-- **macOS 11+**（Big Sur 及以上），Apple Silicon 与 Intel 均提供原生构建，安装包约 2.3 MB
-- **Windows 10 / 11 (x64)**，需要 WebView2（Win11 与较新的 Win10 已内置，缺失时安装程序自动下载）
+- **macOS 11+** (Big Sur or later), with native builds for both Apple Silicon and Intel; installers are about 2.3 MB
+- **Windows 10 / 11 (x64)** with WebView2 (included in Windows 11 and recent Windows 10 builds; setup downloads it when missing)
 
-## 架构
+## Architecture
 
 ```
-Svelte 5 前端 ──IPC（一次传全量 Session）── Tauri v2 后端 ── litediff-core
+Svelte 5 frontend --IPC (full Session per request)--> Tauri v2 backend --> litediff-core
 ```
 
-**三个关键决策**
+**Three key decisions**
 
-- **IPC 一次传全量**：前端无状态，滚动永不等待后端；虚拟化纯在 DOM 侧
-- **滚动单一权威**：面板只上报 `scrollTop`，`App` 存一个数回灌两栏，同像素天然对齐
-- **折叠是投影**：`buildDisplay()` 把 hunk 投影成显示项。注意显示索引与源行索引是两套坐标系，跳转必须投影
+- **Send the full session over IPC**: the frontend stays stateless, scrolling never waits for the backend, and virtualization remains entirely on the DOM side
+- **Single scroll authority**: panels only report `scrollTop`; `App` stores one value and feeds it back to both panes so they stay pixel-aligned
+- **Collapse is a projection**: `buildDisplay()` projects hunks into display items. Display indexes and source-line indexes are separate coordinate systems, so every jump must go through that projection
 
-## 测试
+## Testing
 
 ```bash
-cargo test      # 102 个
-npm test        # 173 个（在 app/ 下）
+cargo test      # Rust
+npm test        # Frontend (run from app/)
 ```
 
-Rust 侧核心是**最优性验证**：内置 DP LCS 暴力解作为 oracle，断言「匹配数 == LCS 长度」，并对 40 组随机低字母表输入逐一核对。开发中它抓出过两次中间蛇重叠判定的错误。
+The core Rust guarantee is **optimality validation**: a brute-force DP LCS implementation serves as an oracle, asserting that the match count equals the LCS length across random low-alphabet inputs. This caught two intermediate-snake overlap bugs during development.
 
-## 已知限制
+## Known Limitations
 
-| 限制 | 原因 |
+| Limitation | Reason |
 |---|---|
-| 就地编辑 | 与虚拟滚动冲突：需要可聚焦输入元素，而虚拟滚动会回收 DOM |
-| 「采纳更改」箭头 | 依赖就地编辑的缓冲区模型 |
-| 行内视图折叠 | 分栏视图有，行内视图未接 |
-| 大文件 | 整文件一次性比对，未做分块流式 |
+| In-place editing | Conflicts with virtual scrolling, which recycles focused DOM nodes |
+| Accept-change arrows | Require the in-place editing buffer model |
+| Collapse in inline view | Available in split view, but not yet wired into inline view |
+| Very large files | Whole-file comparison only; no chunked streaming yet |
