@@ -14,7 +14,7 @@ name: Release
 #
 # Both are the oldest images that still build a modern Rust toolchain without a
 # custom setup step. `macos-14` is arm64, which matches the majority of Macs in use;
-# an Intel build is produced separately on `macos-13` because a single universal
+# an Intel build is produced separately on `macos-15-intel` because a single universal
 # binary would double the download for everyone.
 
 on:
@@ -102,7 +102,7 @@ jobs:
   # Intel pick the `-x64` asset.
   macos-x64:
     name: macOS (Intel)
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
