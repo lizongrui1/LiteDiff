@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "esbuild tests/*.test.ts --bundle --platform=node --format=esm --outdir=.tmp-test --out-extension:.js=.mjs && node --test .tmp-test/*.test.mjs",
+    "test": "esbuild tests/*.test.ts --bundle --platform=node --format=esm --outdir=.tmp-test --out-extension:.js=.mjs && node run-tests.mjs",
     "package": "echo 'Use scripts/package-macos.sh or scripts/package-windows.ps1'"
   },
   "devDependencies": {
