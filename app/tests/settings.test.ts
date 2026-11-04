@@ -228,6 +228,8 @@ test("chrome colours are not user-configurable", () => {
   const b = buildPalette(false, { accent: "#0a84ff", scheme: "classic" });
   assert.equal(a.bg, b.bg);
   assert.equal(a.text, b.text);
+  assert.equal(a.border, b.border);
+});
 
 // --- split ratio ------------------------------------------------------------
 
@@ -253,6 +255,4 @@ test("a dragged split survives a settings round trip", () => {
 test("changing the split is a real modification", () => {
   assert.equal(isModified({ ...DEFAULTS, splitRatio: 0.5 }), false);
   assert.equal(isModified({ ...DEFAULTS, splitRatio: 0.62 }), true);
-});
-  assert.equal(a.border, b.border);
 });
