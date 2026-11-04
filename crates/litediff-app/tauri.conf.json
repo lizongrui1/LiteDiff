@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LiteDiff",
+  "version": "0.1.0",
+  "identifier": "app.litediff.desktop",
+  "build": {
+    "frontendDist": "../../app/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm --prefix ../app run dev",
+    "beforeBuildCommand": "npm --prefix ../app run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LiteDiff",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 720,
+        "minHeight": 420,
+        "titleBarStyle": "Visible",
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "publisher": "LiteDiff",
+    "copyright": "MIT licensed",
+    "category": "DeveloperTool",
+    "shortDescription": "A fast, local diff tool",
+    "longDescription": "A lightweight diff tool that compares text and files, and reads git history. Everything stays on this machine.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "frameworks": []
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "SimpChinese",
+          "TradChinese",
+          "Japanese",
+          "Spanish",
+          "German",
+          "French"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

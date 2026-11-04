@@ -1,0 +1,258 @@
+/**
+ * English catalogue — the source of truth for which message keys exist.
+ *
+ * `MessageKey` is `keyof typeof en`, so every other locale is type-checked against
+ * this object: adding a key here makes every translation file fail to compile
+ * until it is translated, which is exactly the pressure wanted.
+ *
+ * Conventions:
+ *   - Keys are `area.thing` and describe the *meaning*, not the English wording, so
+ *     a translation is not misled by the source language.
+ *   - Strings used as button labels stay short; explanations go in `.title`.
+ *   - `{n}`, `{name}` and friends are substituted by `translate()`.
+ */
+
+export const en = {
+  // --- app shell ----------------------------------------------------------
+  "app.name": "LiteDiff",
+  "app.compareFailed": "The comparison returned an invalid result; keeping what is on screen.",
+  "app.filePickerDesktopOnly": "Choosing a file is only available in the desktop app.",
+  "app.dropPathUnavailable": "Could not read the dropped file's path (drag and drop needs the desktop app).",
+  "app.saved": "Saved {names}",
+  "app.nothingToSave": "Both sides came from the clipboard, so there is no file to save.",
+  "app.historyReadOnly": "Historical versions are read-only; ⌘S will not write back to the repository.",
+
+  // --- what was ignored ---------------------------------------------------
+  "ignore.leadingTrailingWhitespace": "leading/trailing whitespace",
+  "ignore.allWhitespace": "all whitespace",
+  "ignore.case": "case",
+
+  // --- edit mode ----------------------------------------------------------
+  "edit.bar": "Edit both sides, then compare again · ⌘↵ to finish · Esc to cancel",
+  "edit.cancel": "Cancel",
+  "split.resizeLabel": "Resize the two panes",
+  "split.resizeTitle": "Drag to resize · double-click to reset",
+  "edit.recompare": "Compare again",
+  "edit.dirty": "Edited",
+  "edit.paneLabel": "Edit {side}",
+  "edit.contentLabel": "{side} content",
+
+  // --- sides --------------------------------------------------------------
+  "side.left": "Left",
+  "side.right": "Right",
+  "side.leftContent": "Left content",
+  "side.rightContent": "Right content",
+  "side.pasted": "Pasted text",
+
+  // --- toolbar ------------------------------------------------------------
+  "tabs.label": "Open comparisons",
+  "tabs.close": "Close this tab",
+  "tabs.new": "New comparison",
+  "tabs.pasted": "Pasted comparison",
+  "tabs.untitled": "New comparison",
+
+  "toolbar.new": "New",
+  "toolbar.newTitle": "Back to the paste screen to enter new content",
+  "toolbar.git": "Git history",
+  "toolbar.gitTitle": "Open repository history (⌘G)",
+  "toolbar.history": "History",
+  "toolbar.historyTitle": "Open comparison history (⌘Y)",
+  "toolbar.viewMode": "View mode",
+  "toolbar.split": "Side by side",
+  "toolbar.splitTitle": "Side-by-side view (⌘D)",
+  "toolbar.unified": "Inline",
+  "toolbar.unifiedTitle": "Inline unified view (⌘D)",
+  "toolbar.edit": "Edit",
+  "toolbar.editTitle": "Edit both sides",
+  "toolbar.editExit": "Leave edit mode",
+  "toolbar.editExitTitle": "Leave edit mode (Esc)",
+  "toolbar.wrapOn": "Wrap long lines: on",
+  "toolbar.wrapOff": "Wrap long lines: off",
+  "toolbar.wrap": "Wrap long lines",
+  "toolbar.prevDiff": "Previous difference",
+  "toolbar.prevDiffTitle": "Previous difference (⌘[)",
+  "toolbar.nextDiff": "Next difference",
+  "toolbar.nextDiffTitle": "Next difference (⌘])",
+  "toolbar.ignoreWhitespace": "Ignore whitespace",
+  "toolbar.ignoreWhitespaceTitle": "Ignore leading/trailing whitespace and line endings (⌘⇧W)",
+  "toolbar.algorithmTitle": "Switch comparison algorithm",
+  "toolbar.expandAll": "Expand all",
+  "toolbar.expandAllTitle": "Expand every unchanged block (⌘⌥E)",
+  "toolbar.collapseAll": "Collapse all",
+  "toolbar.collapseAllTitle": "Collapse every unchanged block (⌘⌥E)",
+  "toolbar.diffPosition": "Difference {index} of {total}",
+  "toolbar.firstDiffLine": "Start line of the current difference",
+  "toolbar.noDiff": "No differences",
+  "toolbar.busy": "Comparing",
+  "toolbar.settings": "Settings",
+  "toolbar.settingsTitle": "Settings (⌘,)",
+
+  // --- appearance ---------------------------------------------------------
+  "theme.light": "Light",
+  "theme.dark": "Dark",
+  "theme.system": "Follow system",
+  "theme.title": "Current: {name} · click to switch",
+  "theme.ariaLabel": "Appearance: {name}",
+
+  // --- paste screen -------------------------------------------------------
+  "home.clearSide": "Clear this side",
+  "home.clear": "Clear",
+  "home.importFile": "Import from a file",
+  "home.hintBothEmpty": "Paste the content to compare here",
+  "home.hintOtherFilled": "This side is still empty · paste content or drop a file",
+  "home.folderEmpty": "No comparable files in that folder: {path}",
+  "home.folderFirst": "Loaded {name} (the first of {count} files in the folder)",
+
+  // --- comparison result --------------------------------------------------
+  "same.title": "Both sides are identical",
+  "same.detail": "Compared line by line with no differences",
+  "same.ignoring": " (ignored {options})",
+  "same.dismiss": "Dismiss",
+  "same.dismissTitle": "Dismiss this notice",
+
+  // --- folding ------------------------------------------------------------
+  "fold.expand": "Expand lines {from}–{to}",
+  "fold.collapse": "Collapse these {n} unchanged lines",
+
+  // --- minimap ------------------------------------------------------------
+  "minimap.position": "Item {index} of {total}",
+  "minimap.jumpTitle": "Click or drag to jump",
+
+  // --- settings sheet -----------------------------------------------------
+  "fold.unchangedLines": "{n} unchanged lines",
+  "fold.collapseShort": "Collapse {n} lines",
+  "edit.lines": "{n} lines",
+  "same.detailLines": "Compared {lines} lines with no differences",
+
+  "history.title": "History",
+  "history.close": "Close history",
+  "history.loading": "Loading history…",
+  "history.empty": "No comparisons recorded yet.",
+  "history.emptyHint": "Comparisons are saved here automatically. Change the retention window under Settings → History.",
+  "history.today": "Today",
+  "history.yesterday": "Yesterday",
+  "history.fromFiles": "files",
+  "history.delete": "Delete this comparison",
+  "history.clearAll": "Clear history",
+  "history.clearConfirm": "Delete everything?",
+  "history.retentionNote": "Kept for {days} days",
+  "history.open": "History (⌘Y)",
+
+  "settings.title": "Settings",
+  "settings.close": "Close settings",
+  "settings.closeTitle": "Close settings (Esc)",
+  "settings.reset": "Restore defaults",
+  "settings.note": "Changes apply immediately and are saved automatically",
+
+  "settings.section.appearance": "Appearance",
+  "settings.section.colors": "Diff colors",
+  "settings.section.type": "Font and spacing",
+  "settings.section.reading": "Reading and layout",
+  "settings.section.rules": "Comparison rules",
+  "settings.section.history": "History",
+  "settings.section.language": "Language",
+
+  "settings.theme": "Theme",
+  "settings.accent": "Accent color",
+  "settings.accentCustom": "Custom accent color",
+  "settings.custom": "Custom",
+  "settings.scheme": "Color scheme",
+  "settings.schemeClassic": "Red / green",
+  "settings.schemeClassicHint": "Default, matches the usual diff convention",
+  "settings.schemeColorblind": "Blue / amber",
+  "settings.schemeColorblindHint": "Distinguishable with red-green color blindness",
+  "settings.schemeMuted": "Muted",
+  "settings.schemeMutedHint": "Stays out of the way of syntax highlighting",
+  "settings.intensity": "Tint strength",
+  "settings.intensitySoft": "Soft",
+  "settings.intensityNormal": "Normal",
+  "settings.intensityStrong": "Strong",
+  "settings.edge": "Change edge marker",
+  "settings.intraLine": "Intra-line highlight",
+  "settings.syntaxHighlight": "Syntax highlighting",
+  "settings.fontSize": "Font size",
+  "settings.lineHeight": "Line height",
+  "settings.lineNumbers": "Line numbers",
+  "settings.minimap": "Minimap",
+  "settings.autoFold": "Collapse unchanged blocks on open",
+  "settings.foldThreshold": "Collapse threshold",
+  "settings.splitRatio": "Side widths",
+  "settings.ignoreWhitespace": "Ignore leading/trailing whitespace",
+  "settings.ignoreCase": "Ignore case",
+  "settings.language": "Interface language",
+  "settings.historyEnabled": "Save comparison history",
+  "settings.historyDays": "Keep for",
+  "settings.historyDaysUnit": "days",
+  "settings.historyKeep": "Keep at most",
+  "settings.historyKeepUnit": "entries",
+  "settings.historyHint": "Comparisons reopen from history when you relaunch. 0 turns off the time limit or the entry limit. Nothing is uploaded — everything stays on this device.",
+  "settings.languageAuto": "Follow the system",
+
+  "accent.systemBlue": "System blue",
+  "accent.indigo": "Indigo",
+  "accent.teal": "Teal",
+  "accent.amber": "Amber",
+  "accent.rose": "Rose",
+  "accent.graphite": "Graphite",
+
+  // --- git sheet ----------------------------------------------------------
+  "git.title": "Git history",
+  "git.loadingRepo": "Reading repository…",
+  "git.desktopOnly": "Browsing repositories is only available in the desktop app.",
+  "git.notARepo": "That location is not inside a Git repository.",
+  "git.noFiles": "No comparable files in this repository.",
+  "git.noHistory": "This file has no commits yet.",
+  "git.changeRepo": "Change",
+  "git.chooseRepo": "Choose repository…",
+  "git.noRepo": "No repository selected",
+  "git.files": "Files",
+  "git.fileView": "File display mode",
+  "git.viewList": "List",
+  "git.viewListTitle": "Flat list: sorted by path, one file per row",
+  "git.viewTree": "Tree",
+  "git.viewTreeTitle": "Tree: grouped by directory, collapsible",
+  "git.filterPlaceholder": "Filter by path…",
+  "git.filterLabel": "Filter files",
+  "git.noMatch": "No matching files",
+  "git.comparison": "Compare",
+  "git.clearLeft": "Clear the left side",
+  "git.clearRight": "Clear the right side",
+  "git.assignHint": "Use 左 / 右 on a commit below to assign it to a side",
+  "git.branches": "Branches",
+  "git.branchFilter": "Filter branches…",
+  "git.resize": "Resize panel",
+  "git.branchSwitch": "Switch",
+  "git.branchCurrent": "current",
+  "git.switching": "Switching…",
+  "git.switchConfirm": "Switch {repo} to branch \"{branch}\"?\n\nYour uncommitted changes are kept: if they conflict, git refuses and nothing is lost.",
+  "git.branchCompare": "Compare branches",
+  "git.branchSame": "Pick two different branches.",
+  "git.branchNoChange": "These branches have no differences.",
+  "git.branchFiles": "{n} changed files",
+  "git.branchFileHint": "Click a file to open it as a comparison",
+  "git.statusAdded": "added",
+  "git.statusDeleted": "deleted",
+  "git.statusRenamed": "renamed",
+  "git.statusModified": "modified",
+  "git.ahead": "{n} ahead",
+  "git.behind": "{n} behind",
+  "git.assignLeft": "As the left side",
+  "git.assignRight": "As the right side",
+  "git.revisions": "Versions",
+  "git.loadingHistory": "Reading history…",
+  "git.worktree": "Working tree (uncommitted changes)",
+  "git.worktreeMeta": "Current file content",
+  "git.noSubject": "(no commit message)",
+  "git.shortRevision": "Working tree",
+  "git.startCompare": "Compare",
+  "git.fileCount": "{path} ({count} files)",
+  "git.rowLabelLeft": "L",
+  "git.rowLabelRight": "R",
+
+  // --- breadcrumb for a git side -----------------------------------------
+  "git.unassigned": "Not selected",
+
+  // --- errors surfaced from the backend ----------------------------------
+  // The Rust side returns its own messages; these are the ones the UI adds.
+  "error.invalidSession": "The comparison returned an invalid result; keeping what is on screen.",
+} as const;

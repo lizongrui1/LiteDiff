@@ -1,0 +1,234 @@
+name: Release
+
+# Builds installers for macOS and Windows and attaches them to a draft GitHub
+# release.
+#
+# ## Why a draft release
+#
+# The artifacts are attached to a draft first, and publishing is a separate manual
+# step. A release is the one thing in this repository that cannot be undone quietly
+# — once an asset URL is public, someone's download link may already point at it —
+# so the workflow prepares everything and a human presses publish.
+#
+# ## Why `macos-14` and `windows-2022`
+#
+# Both are the oldest images that still build a modern Rust toolchain without a
+# custom setup step. `macos-14` is arm64, which matches the majority of Macs in use;
+# an Intel build is produced separately on `macos-13` because a single universal
+# binary would double the download for everyone.
+
+on:
+  push:
+    # Version tags only: this workflow is for shipping, not for ordinary pushes.
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp (e.g. 0.2.0). Empty uses tauri.conf.json."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  # One release at a time; a second tag push while a build is running should
+  # cancel the older one rather than race for the same asset names.
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- macOS (Apple Silicon) -------------------------------------------------
+  macos-arm64:
+    name: macOS (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-arm64
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Test frontend
+        working-directory: app
+        run: npm test
+
+      - name: Type-check
+        working-directory: app
+        run: npm run check
+
+      - name: Test and lint Rust
+        run: |
+          cargo test --workspace
+          cargo clippy --all-targets -- -D warnings
+
+      # The bundle is assembled by this script rather than `tauri build`, so the
+      # release artifact goes through exactly the same path a developer uses.
+      - name: Package app and DMG
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./scripts/package-macos.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist-macos/*.dmg
+
+  # --- macOS (Intel) ---------------------------------------------------------
+  # Kept as its own job rather than a universal build: a universal binary doubles
+  # the size for every arm64 user, and Intel Macs are now a minority. Users on
+  # Intel pick the `-x64` asset.
+  macos-x64:
+    name: macOS (Intel)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-x64
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Package app and DMG
+        run: ./scripts/package-macos.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: dist-macos/*.dmg
+
+  # --- Windows ---------------------------------------------------------------
+  windows-x64:
+    name: Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      # The script drives `tauri build` for the NSIS installer, which needs the CLI
+      # resolved from devDependencies rather than installed globally.
+      - name: Package installer and zip
+        shell: powershell
+        run: ./scripts/package-windows.ps1 -Version "${{ inputs.version }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            dist-windows/*.exe
+            dist-windows/*.zip
+
+  # --- release ---------------------------------------------------------------
+  publish:
+    name: Draft release
+    needs: [macos-arm64, macos-x64, windows-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Flatten the per-job directories so the release has one list of files
+      # rather than a tree of folders.
+      - name: Collect files
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.zip' \) -exec cp {} release/ \;
+          ls -lh release
+
+      # `softprops/action-gh-release` writes the checksums the user needs to verify
+      # a download, which matters more than usual here: the builds are not
+      # notarized (that requires a paid Apple Developer account), so a SHA-256 is
+      # the only way a cautious user can confirm they got the file we built.
+      - name: Write checksums
+        working-directory: release
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          # A tag push carries the version; a manual run falls back to the ref name.
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: release/*
+          generate_release_notes: true
+          body: |
+            ## Download
+
+            | Platform | File |
+            |---|---|
+            | macOS (Apple Silicon) | `LiteDiff-*-macos-arm64.dmg` |
+            | macOS (Intel) | `LiteDiff-*-macos-x64.dmg` |
+            | Windows 10/11 (x64) | `LiteDiff-*-windows-x64.exe` |
+            | Windows portable (no install) | `LiteDiff-*-windows-x64.zip` |
+
+            ## Install
+
+            - **macOS**: open the `.dmg`, drag LiteDiff to Applications.
+              The build is ad-hoc signed but **not notarized**, so the first launch
+              needs *System Settings → Privacy & Security → Open Anyway*, or
+              `xattr -dr com.apple.quarantine /Applications/LiteDiff.app`.
+            - **Windows**: run the `.exe`. No administrator rights are needed — it
+              installs for the current user. If WebView2 is missing, setup downloads
+              it automatically.
+
+            ## Verify
+
+            Compare your download against `SHA256SUMS.txt`:
+
+            ```
+            shasum -a 256 -c SHA256SUMS.txt   # macOS
+            certutil -hashfile <file> SHA256  # Windows
+            ```

@@ -1,0 +1,13 @@
+# Normalize text files to LF for consistent builds across macOS and Windows.
+* text=auto eol=lf
+
+# Keep binary assets untouched.
+*.dmg binary
+*.exe binary
+*.ico binary
+*.icns binary
+*.msi binary
+*.png binary
+*.woff binary
+*.woff2 binary
+*.zip binary

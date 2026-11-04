@@ -1,0 +1,201 @@
+/**
+ * Global stylesheet.
+ *
+ * Only resets and page-level layout live here. Every component owns its own
+ * scoped styles; every colour comes from a `--c-*` custom property set by
+ * `theme.ts`, so switching palettes never touches a component.
+ */
+
+/*
+ * JetBrains Mono, bundled rather than assumed.
+ *
+ * Naming a font in `font-family` only works if the machine has it, and most do
+ * not, so the app would silently fall back to Menlo and the request "use
+ * JetBrains Mono" would have no visible effect. Shipping the woff2 makes the
+ * typeface part of the product.
+ *
+ * Only Regular and Bold: the code surface needs those two, and one weight of this
+ * family is ~90 KB. The full set would add ~1.5 MB to an 8 MB app for weights
+ * nothing renders.
+ *
+ * `font-display: block` is deliberate. This is the primary UI face of a
+ * code-reading tool, not decoration: showing text in Menlo and swapping it a
+ * moment later causes a visible reflow, and with `swap` the entire diff would
+ * re-measure once the real font arrives. Blocking briefly is the cheaper trade.
+ *
+ * Licensed under the SIL Open Font License 1.1; see
+ * `src/fonts/JetBrainsMono-OFL.txt`.
+ */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("./fonts/JetBrainsMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("./fonts/JetBrainsMono-Bold.woff2") format("woff2");
+}
+
+/*
+ * `color-scheme` is deliberately NOT set here.
+ *
+ * It is written from `applyPalette` instead, because it has to follow the theme
+ * the user picked in the app, not the OS preference. A static `light dark` here
+ * would make the native scrollbars and the window chrome keep tracking the system
+ * while the app itself switched — the half-converted window reported as the dark
+ * theme bug.
+ */
+:root {
+
+  /* Fallbacks so the first paint is never unstyled while JS boots. */
+  --c-bg: #ffffff;
+  --c-text: rgba(0, 0, 0, 0.88);
+  --c-border: rgba(0, 0, 0, 0.1);
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  overflow: hidden;
+  /* A diff tool is chrome-free: no text selection outside the code itself. */
+  user-select: none;
+}
+
+/* UI text must never be selected by drag; code panes opt back in. */
+.selectable {
+  user-select: text;
+}
+
+/*
+ * Focus ring: macOS uses a soft accent ring, not the default 2px outline. Only
+ * show it for keyboard users so mouse clicks do not paint a ring.
+ */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* Respect the system preference for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * Scrollbars: no vertical gutter, a themed horizontal one.
+ *
+ * ## The problem this solves
+ *
+ * Any classic scrollbar — a declared `::-webkit-scrollbar` width, `overflow: auto`
+ * on a platform that reserves space, `scrollbar-width: thin` — claims a strip of
+ * layout on the scroller's inline edge. Content is clipped to the *content* box, so
+ * a code row's tint (which is `min-width: 100%` of that box) stops at the strip and
+ * leaves it unpainted: a pale band down the right edge of every coloured row. No CSS
+ * can paint a row underneath a scrollbar that reserves space, and the strip cannot be
+ * made transparent-to-content — it shows the scroller's own background, which is the
+ * pane colour, not the row's.
+ *
+ * ## What is done instead
+ *
+ * The vertical scrollbar is given zero width. The content box then spans the full
+ * pane, every row paints edge to edge, and the band is gone by construction rather
+ * than by covering it up. The horizontal scrollbar keeps a normal height: it sits
+ * below the last row where there is no row background to cut into, and horizontal
+ * scrolling still needs a visible affordance.
+ *
+ * Vertical position is still legible — the minimap draws the viewport band — and the
+ * wheel, trackpad and keyboard all scroll regardless of whether a bar is drawn.
+ *
+ * `scrollbar-width`/`scrollbar-color` are deliberately *not* set globally for the
+ * vertical axis for the same reason: `thin` reserves space too.
+ */
+.pane::-webkit-scrollbar,
+.unified::-webkit-scrollbar {
+  width: 0;
+  height: 10px;
+  background: transparent;
+}
+
+.pane::-webkit-scrollbar-track,
+.unified::-webkit-scrollbar-track,
+.pane::-webkit-scrollbar-track-piece,
+.unified::-webkit-scrollbar-track-piece,
+.pane::-webkit-scrollbar-corner,
+.unified::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* The horizontal thumb: a themed pill, the only part with a colour. */
+.pane::-webkit-scrollbar-thumb,
+.unified::-webkit-scrollbar-thumb {
+  background: var(--c-border-strong);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.pane::-webkit-scrollbar-thumb:hover,
+.unified::-webkit-scrollbar-thumb:hover {
+  background: var(--c-text-faint);
+  background-clip: content-box;
+}
+
+/*
+ * Firefox and any engine without the WebKit pseudo-elements. `thin` still reserves a
+ * few pixels there, so the pane background behind it matches the row background — the
+ * best available answer when the scrollbar cannot be removed.
+ */
+@supports not selector(::-webkit-scrollbar) {
+  .pane,
+  .unified {
+    scrollbar-width: thin;
+    scrollbar-color: var(--c-border-strong) transparent;
+  }
+}
+
+/*
+ * Metrics bridge: the TS constants in `theme.ts` are the single source of
+ * truth, but the virtual scroller's arithmetic must agree with CSS exactly, so
+ * these values are mirrored here. `scripts/check-metrics.mjs` fails the build if
+ * the two ever drift.
+ */
+:root {
+  --row-height: 20px;
+  --font-size-code: 12px;
+  --gutter-width: 52px;
+  --minimap-width: 10px;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Monaco,
+    "Cascadia Mono", "Roboto Mono", monospace;
+}
