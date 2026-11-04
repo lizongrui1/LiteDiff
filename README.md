@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="crates/litediff-app/icons/icon.png" alt="LiteDiff app icon" width="128" height="128" />
+
 # LiteDiff
 
 **本地文本 / 代码差异比对工具**
