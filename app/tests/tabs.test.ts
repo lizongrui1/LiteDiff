@@ -188,9 +188,10 @@ test("content on either side is enough", () => {
 // asserted.
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const appSource = readFileSync(
-  new URL("../src/App.svelte", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/App.svelte", import.meta.url)),
   "utf8",
 );
 

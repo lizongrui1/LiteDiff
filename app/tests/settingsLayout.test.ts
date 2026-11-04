@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CATALOGUES, LOCALES } from "../src/lib/i18n.ts";
 
 /*
@@ -20,7 +21,7 @@ import { CATALOGUES, LOCALES } from "../src/lib/i18n.ts";
  * the narrowest columns.
  */
 
-const LIB = new URL("../src/lib/", import.meta.url).pathname;
+const LIB = fileURLToPath(new URL("../src/lib/", import.meta.url));
 
 function read(name: string): string {
   return readFileSync(join(LIB, name), "utf8");

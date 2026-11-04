@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /*
  * Two classes of regression that only a source-level check can catch.
@@ -19,8 +20,8 @@ import { join } from "node:path";
  *    silently became an empty 14x14 box with no visible glyph and no build error.
  */
 
-const LIB = new URL("../src/lib/", import.meta.url).pathname;
-const SRC = new URL("../src/", import.meta.url).pathname;
+const LIB = fileURLToPath(new URL("../src/lib/", import.meta.url));
+const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
 function read(name: string): string {
   return readFileSync(join(LIB, name), "utf8");

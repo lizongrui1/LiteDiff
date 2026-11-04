@@ -110,8 +110,12 @@ test("the accessible label reports the state, not the action", () => {
  * radiating teeth are indistinguishable from the sun icon's sun rays at 14px.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const toolbar = readFileSync(new URL("../src/lib/Toolbar.svelte", import.meta.url).pathname, "utf8");
+const toolbar = readFileSync(
+  fileURLToPath(new URL("../src/lib/Toolbar.svelte", import.meta.url)),
+  "utf8",
+);
 
 test("the appearance button renders one icon per mode", () => {
   const section = toolbar.slice(
