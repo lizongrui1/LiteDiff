@@ -1,7 +1,6 @@
 //! Myers O(ND) diff, linear-space "bisect" variant.
 //!
-//! This is the workhorse: it is used directly for `LineAlgorithm::Myers`, and as
-//! the fallback inside patience diff for regions with no anchor lines.
+//! This is the line-level workhorse for both full-line and token-level matching.
 //!
 //! ## Coordinate conventions
 //!
@@ -341,6 +340,10 @@ mod tests {
         let got = check(&a, &b);
         // Two inserts at the same offset: `1000` lines of a survive, everything
         // else about them is identical, so the LCS length is `a.len() - 1`.
-        assert_eq!(got.len(), 2000, "every shared line matches; only the insert differs");
+        assert_eq!(
+            got.len(),
+            2000,
+            "every shared line matches; only the insert differs"
+        );
     }
 }

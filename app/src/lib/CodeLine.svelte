@@ -13,6 +13,9 @@
    */
   import type { InlineSegment, RowKind } from "../lib/types";
   import type { Token } from "../lib/syntax";
+  import { rowTint } from "../lib/theme";
+  import type { SearchSlice } from "../lib/search";
+  import { buildCodePieces } from "../lib/codeRender";
 
   interface Props {
     /** 0-based line index, or null for a padded cell. */
@@ -39,6 +42,10 @@
      * gutter so the break is visibly not a new line of code.
      */
     continued?: boolean;
+    /** Constrain the cell to the pane width in wrapped mode. */
+    wrapped?: boolean;
+    /** Search matches clipped to this physical wrapped slice. */
+    searchSlices?: SearchSlice[];
     /**
      * Syntax tokens for this line, when the document's language is known.
      *
@@ -60,26 +67,25 @@
     side,
     active = false,
     continued = false,
+    wrapped = false,
     tokens = [],
+    searchSlices = [],
   }: Props = $props();
 
-  // Delete/insert tinting is directional: a left cell can only be a deletion,
-  // a right cell only an insertion.
-  const tint = $derived(
-    kind === "delete" || (kind === "modify" && side === "left")
-      ? "del"
-      : kind === "insert" || (kind === "modify" && side === "right")
-        ? "ins"
-        : "none",
-  );
-
   const isPadded = $derived(line === null);
+
+  // Delete/insert tinting is directional and belongs only to real lines. A padded
+  // cell is an alignment placeholder, so colouring it would imply the old side has
+  // an added line of its own.
+  const tint = $derived(rowTint(kind, side, isPadded));
+  const pieces = $derived(buildCodePieces(text, segments, tokens, searchSlices));
 </script>
 
 <div
   class="cell"
   class:padded={isPadded}
   class:active
+  class:wrapped
   data-kind={kind}
   data-tint={tint}
   data-side={side}
@@ -107,24 +113,16 @@
   <span class="code selectable">
     {#if isPadded}
       <!-- Nothing: the hatched background is painted by the .padded rule. -->
-    {:else if segments.length > 0}
-      {#each segments as seg, i (i)}
-        {#if seg.changed}
-          <span class="pill" data-tint={tint}>{seg.text}</span>
-        {:else}
-          <span>{seg.text}</span>
-        {/if}
-      {/each}
-    {:else if tokens.length > 0}
-      {#each tokens as token, i (i)}
-        {#if token.kind === "plain"}
-          <span>{token.text}</span>
-        {:else}
-          <span class={`syn-${token.kind}`}>{token.text}</span>
-        {/if}
-      {/each}
     {:else}
-      <span>{text}</span>
+      {#each pieces as piece, i (i)}
+        <span
+          class:pill={piece.changed}
+          class:search-hit={piece.search === "hit"}
+          class:search-current={piece.search === "current"}
+          class={`syn-${piece.kind}`}
+          data-tint={piece.changed ? tint : "none"}
+        >{piece.text}</span>
+      {/each}
     {/if}
   </span>
 </div>
@@ -138,6 +136,8 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-code);
     white-space: pre;
+    /* Keep in sync with TAB_COLUMNS in viewport.ts. */
+    tab-size: 8;
     box-sizing: border-box;
     /*
      * The cell's background is the change tint, so it must span the full visible
@@ -164,6 +164,19 @@
     min-width: 100%;
     width: max-content;
     contain: style;
+  }
+
+  /*
+   * A wrapped cell is a viewport, not an intrinsic-width code line.
+   *
+   * The normal cell intentionally uses `width: max-content` so unwrapped code can
+   * extend horizontally. Leaving that in place after wrapping lets the widest
+   * slice create a scroll range and causes the pane to appear shifted sideways.
+   */
+  .cell.wrapped {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 
   /*
@@ -306,6 +319,12 @@
     white-space: pre;
   }
 
+  .cell.wrapped .code {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
   /* --- intra-line pill ------------------------------------------------ */
   /*
    * 2px radius per the spec. `box-decoration-break` is not needed because a
@@ -326,6 +345,21 @@
     color: var(--c-ins-pill-text);
   }
 
+  /* Search wins over diff pills and syntax colours on the same characters. */
+  .search-hit {
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--c-accent) 24%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-accent) 42%, transparent);
+  }
+
+  .search-current {
+    border-radius: 2px;
+    background: var(--c-accent);
+    color: var(--c-bg);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-accent) 72%, transparent);
+    font-weight: 650;
+  }
+
   /* --- hatched placeholder -------------------------------------------- */
   /*
    * 45° micro-stripe. Drawn as a repeating gradient rather than an image so it
@@ -341,23 +375,10 @@
   }
 
   /*
-   * A placeholder that belongs to a changed run gets the run's tint underneath the
-   * stripe, so the colour block continues into the empty column instead of leaving
-   * a white notch. Declared after the generic rule so it wins.
-   */
-  .cell.padded[data-tint="del"] {
-    background-color: color-mix(in srgb, var(--c-del-edge) 10%, var(--c-hatch-bg));
-  }
-
-  .cell.padded[data-tint="ins"] {
-    background-color: color-mix(in srgb, var(--c-ins-edge) 10%, var(--c-hatch-bg));
-  }
-
-  /*
    * Padded (hatched) cells keep the gutter transparent so the 45° stripe reads as
-   * one continuous surface across the whole cell — but the *cell* still carries
-   * its row tint via the outline below, so a run of added lines stays visually
-   * unbroken into the placeholder column instead of leaving a white notch.
+   * one continuous neutral surface across the whole cell. They deliberately carry
+   * no red/green change tint: only lines that actually exist on that side may look
+   * added or removed.
    */
   .cell.padded .gutter {
     background: transparent;

@@ -3,22 +3,10 @@
 //! These are the Step 1 acceptance criteria: the engine must produce a correct,
 //! minimal, renderable diff for the kinds of input the UI will actually hand it.
 
-use litediff_core::{
-    diff, DiffOptions, InlineSegment, LineAlgorithm, RowKind, SourceText,
-};
+use litediff_core::{diff, DiffOptions, InlineSegment, RowKind, SourceText};
 
 fn myers() -> DiffOptions {
-    DiffOptions {
-        algorithm: LineAlgorithm::Myers,
-        ..DiffOptions::default()
-    }
-}
-
-fn patience() -> DiffOptions {
-    DiffOptions {
-        algorithm: LineAlgorithm::Patience,
-        ..DiffOptions::default()
-    }
+    DiffOptions::default()
 }
 
 fn rebuilt_left(result: &litediff_core::DiffResult, left: &str) -> String {
@@ -52,7 +40,10 @@ fn assert_rows_well_formed(result: &litediff_core::DiffResult) {
         );
         match row.kind {
             RowKind::Equal | RowKind::Modify => {
-                assert!(row.left.is_some() && row.right.is_some(), "row {i}: {row:?}");
+                assert!(
+                    row.left.is_some() && row.right.is_some(),
+                    "row {i}: {row:?}"
+                );
             }
             RowKind::Delete => assert!(row.left.is_some() && row.right.is_none()),
             RowKind::Insert => assert!(row.left.is_none() && row.right.is_some()),
@@ -64,7 +55,10 @@ fn assert_rows_well_formed(result: &litediff_core::DiffResult) {
 fn assert_hunks_tile_rows(result: &litediff_core::DiffResult) {
     let mut expected_start = 0u32;
     for (i, h) in result.hunks.iter().enumerate() {
-        assert_eq!(h.row_start, expected_start, "hunk {i} must start where the last ended");
+        assert_eq!(
+            h.row_start, expected_start,
+            "hunk {i} must start where the last ended"
+        );
         assert!(h.row_len > 0, "empty hunk at {i}");
         expected_start += h.row_len;
     }
@@ -95,8 +89,14 @@ fn assert_roundtrip(result: &litediff_core::DiffResult, left: &str, right: &str)
         .map(|i| right_lines[i as usize])
         .collect();
 
-    assert_eq!(rebuilt_l, left_lines, "left side must be preserved in order");
-    assert_eq!(rebuilt_r, right_lines, "right side must be preserved in order");
+    assert_eq!(
+        rebuilt_l, left_lines,
+        "left side must be preserved in order"
+    );
+    assert_eq!(
+        rebuilt_r, right_lines,
+        "right side must be preserved in order"
+    );
 }
 
 #[test]
@@ -158,7 +158,10 @@ fn insertion_produces_padded_row_on_the_left() {
         .iter()
         .find(|r| r.kind == RowKind::Insert)
         .expect("one inserted row");
-    assert!(inserted.left.is_none(), "left cell must be a hatch placeholder");
+    assert!(
+        inserted.left.is_none(),
+        "left cell must be a hatch placeholder"
+    );
     assert_eq!(inserted.right, Some(1));
 }
 
@@ -203,14 +206,12 @@ fn both_sides_roundtrip_for_a_realistic_file() {
     let left = "import a\nimport b\n\nfn one() {\n    a();\n}\n\nfn two() {\n    b();\n}\n";
     let right = "import a\nimport c\n\nfn one() {\n    a2();\n}\n\nfn two() {\n    b();\n}\n";
 
-    for opts in [myers(), patience()] {
-        let result = diff(left, right, &opts);
-        assert_rows_well_formed(&result);
-        assert_hunks_tile_rows(&result);
-        assert_roundtrip(&result, left, right);
-        assert_eq!(rebuilt_left(&result, left), left.trim_end());
-        assert_eq!(rebuilt_right(&result, right), right.trim_end());
-    }
+    let result = diff(left, right, &myers());
+    assert_rows_well_formed(&result);
+    assert_hunks_tile_rows(&result);
+    assert_roundtrip(&result, left, right);
+    assert_eq!(rebuilt_left(&result, left), left.trim_end());
+    assert_eq!(rebuilt_right(&result, right), right.trim_end());
 }
 
 #[test]
@@ -250,19 +251,12 @@ fn ignore_whitespace_collapses_indentation_only_changes() {
 }
 
 #[test]
-fn ignore_case_is_available_for_both_algorithms() {
+fn ignore_case_is_available() {
     let left = "Foo\nBar\n";
     let right = "foo\nbar\n";
     let opts = DiffOptions {
         ignore_case: true,
         ..myers()
-    };
-    assert!(diff(left, right, &opts).is_identical());
-
-    let opts = DiffOptions {
-        ignore_case: true,
-        algorithm: LineAlgorithm::Patience,
-        ..DiffOptions::default()
     };
     assert!(diff(left, right, &opts).is_identical());
 }
@@ -293,18 +287,11 @@ fn change_hunks_are_navigable() {
 #[test]
 fn hunk_lookup_outside_any_hunk_returns_none() {
     let result = diff("a\n", "a\n", &myers());
-    assert_eq!(result.hunk_at_row(0).map(|i| result.hunks[i].equal), Some(true));
+    assert_eq!(
+        result.hunk_at_row(0).map(|i| result.hunks[i].equal),
+        Some(true)
+    );
     assert!(result.hunk_at_row(99).is_none());
-}
-
-#[test]
-fn algorithms_agree_on_trivial_input() {
-    let left = "a\nb\nc\n";
-    let right = "a\nx\nc\n";
-    let m = diff(left, right, &myers());
-    let p = diff(left, right, &patience());
-    assert_eq!(m.stats, p.stats);
-    assert_eq!(m.rows.len(), p.rows.len());
 }
 
 #[test]

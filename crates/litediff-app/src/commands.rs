@@ -119,7 +119,6 @@ pub async fn clear(state: State<'_, AppState>) -> Result<Session, String> {
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SyncOptions {
-    pub algorithm: Option<String>,
     pub ignore_whitespace: Option<bool>,
     pub ignore_all_whitespace: Option<bool>,
     pub ignore_case: Option<bool>,
@@ -130,7 +129,6 @@ impl SyncOptions {
     /// Fold onto a base config, mirroring [`OptionsPatch::apply_to`].
     fn apply_to(&self, base: &DiffOptions) -> DiffOptions {
         OptionsPatch {
-            algorithm: self.algorithm.clone(),
             ignore_whitespace: self.ignore_whitespace,
             ignore_all_whitespace: self.ignore_all_whitespace,
             ignore_case: self.ignore_case,
@@ -203,7 +201,10 @@ pub async fn inspect_path(path: String) -> Result<DroppedPath, String> {
         .filter_map(|f| f.to_str().map(str::to_string))
         .collect();
 
-    Ok(DroppedPath { is_dir: true, files })
+    Ok(DroppedPath {
+        is_dir: true,
+        files,
+    })
 }
 
 /// Expand a dropped directory into its files.
@@ -442,7 +443,6 @@ mod git_tests {
         assert_ne!(old.label, new.label);
     }
 
-
     /// Throwaway repository, mirroring the helper in `git::tests`.
     ///
     /// A second copy is deliberate: `git::tests` is private to that module, and
@@ -454,11 +454,8 @@ mod git_tests {
 
     impl Repo {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "litediff-cmd-{}-{}",
-                name,
-                std::process::id()
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("litediff-cmd-{}-{}", name, std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("mkdir");
             let repo = Repo { dir };
@@ -532,11 +529,14 @@ mod git_tests {
         // Uncommitted edit, which is exactly what "工作区" must show.
         repo.write("src/a.txt", "alpha\nbeta changed\ngamma\n");
 
-        let live = crate::git::blob_at(&repo.path(), crate::git::WORKTREE, "src/a.txt")
-            .expect("worktree");
+        let live =
+            crate::git::blob_at(&repo.path(), crate::git::WORKTREE, "src/a.txt").expect("worktree");
         let old = crate::git::blob_at(&repo.path(), &first, "src/a.txt").expect("blob");
 
-        let left = Side::from_git(&spec_at(&repo.path(), crate::git::WORKTREE, "src/a.txt"), live);
+        let left = Side::from_git(
+            &spec_at(&repo.path(), crate::git::WORKTREE, "src/a.txt"),
+            live,
+        );
         let right = Side::from_git(&spec_at(&repo.path(), &first, "src/a.txt"), old);
 
         let state = AppState::default();
@@ -550,7 +550,7 @@ mod git_tests {
         // Line-level alignment is free to pair "beta changed" with "beta" as a
         // modification and then report "gamma" as an addition, or to report both
         // as a delete+insert run. Asserting one exact split would be asserting
-        // the algorithm's taste rather than the behaviour under test.
+        // the aligner's taste rather than the behaviour under test.
         let changed = session.result.stats.added
             + session.result.stats.deleted
             + session.result.stats.modified;
@@ -654,11 +654,7 @@ pub async fn history_clear(app: tauri::AppHandle) -> Result<usize, String> {
 /// `days <= 0` disables the age rule and `keep <= 0` the count rule, which is how
 /// the settings UI spells "off".
 #[tauri::command]
-pub async fn history_prune(
-    app: tauri::AppHandle,
-    days: i64,
-    keep: usize,
-) -> Result<usize, String> {
+pub async fn history_prune(app: tauri::AppHandle, days: i64, keep: usize) -> Result<usize, String> {
     let root = history_root(&app)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

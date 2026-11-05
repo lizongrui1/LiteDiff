@@ -161,7 +161,7 @@ if (-not $Installer) { throw "No NSIS installer was produced; check the tauri bu
 # The version comes from the built artifact, so the release name always matches
 # what is inside it.
 $ResolvedVersion = if ($Version -ne "") { $Version } else {
-    if ($Installer.Name -match '^LiteDiff_([\d.]+)_') { $Matches[1] } else { "0.1.0" }
+    if ($Installer.Name -match '^LiteDiff_([\d.]+)_') { $Matches[1] } else { "0.1.1" }
 }
 
 $InstallerName = "LiteDiff-$ResolvedVersion-windows-$Arch.exe"

@@ -7,7 +7,9 @@ import {
   hasContent,
   indexAfterClose,
   moveTab,
+  normalizeTabName,
   numberLabels,
+  renameTab,
   tabLabel,
 } from "../src/lib/tabs.ts";
 import type { Session, Side } from "../src/lib/types.ts";
@@ -36,7 +38,6 @@ const session = (left: Side, right: Side): Session => ({
     stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
   },
   options: {
-    algorithm: "myers",
     ignore_whitespace: false,
     ignore_all_whitespace: false,
     ignore_case: false,
@@ -58,6 +59,7 @@ test("tabs created from identical sessions get distinct ids", () => {
 
 test("a new tab starts in split view with nothing expanded", () => {
   const tab = createTab(session(side(), side()));
+  assert.equal(tab.name, null);
   assert.equal(tab.view, "split");
   assert.equal(tab.expanded.size, 0);
   assert.equal(tab.scrollTop, 0);
@@ -108,6 +110,41 @@ test("two pasted sides fall back to the provided label", () => {
 test("the label never wraps onto a full path", () => {
   const label = tabLabel(session(side({ path: "/deep/nested/dir/file.ts" }), side()), "p");
   assert.equal(label, "file.ts");
+});
+
+test("a custom tab name overrides the session-derived label", () => {
+  const s = session(side({ path: "/a/foo.go" }), side({ path: "/b/bar.go" }));
+  assert.equal(tabLabel(s, "Pasted", "New", "Release check"), "Release check");
+});
+
+test("a whitespace-only custom name restores the automatic label", () => {
+  const s = session(side({ path: "/a/foo.go" }), side());
+  assert.equal(normalizeTabName(" \n\t "), null);
+  assert.equal(tabLabel(s, "Pasted", "New", "   "), "foo.go");
+});
+
+test("renaming trims the name and preserves tab identity and order", () => {
+  const a = createTab(session(side(), side()));
+  const b = createTab(session(side(), side()));
+  const before = [a, b];
+  const after = renameTab(before, a.id, "  Release check  ");
+
+  assert.deepEqual(
+    after.map((tab) => tab.id),
+    [a.id, b.id],
+  );
+  assert.equal(after[0].name, "Release check");
+  assert.equal(after[1], b, "unrelated tabs keep their identity");
+  assert.equal(a.name, null, "the input array is not mutated");
+});
+
+test("renaming to blank restores automatic naming", () => {
+  const tab = createTab(session(side({ path: "/a/foo.go" }), side()));
+  const named = renameTab([tab], tab.id, "Custom");
+  const restored = renameTab(named, tab.id, "  ");
+
+  assert.equal(restored[0].name, null);
+  assert.equal(tabLabel(restored[0].session, "Pasted", "New", restored[0].name), "foo.go");
 });
 
 // --- closing ----------------------------------------------------------------
@@ -362,4 +399,25 @@ test("numbering does not depend on there being a duplicate yet", () => {
     (t) => t.repeatable,
   );
   assert.deepEqual(labels, ["New 1", "New 2"]);
+});
+
+test("an explicitly named blank tab is not force-numbered", () => {
+  const tab = { ...createEmptyTab(), name: "Notes" };
+  const labels = numberLabels(
+    [tab],
+    (item) => tabLabel(item.session, "Pasted", "New", item.name),
+    (item) => item.name === null && !hasContent(item.session),
+  );
+  assert.deepEqual(labels, ["Notes"]);
+});
+
+test("duplicate custom tab names are still numbered", () => {
+  const a = { ...createEmptyTab(), name: "Notes" };
+  const b = { ...createEmptyTab(), name: "Notes" };
+  const labels = numberLabels(
+    [a, b],
+    (item) => tabLabel(item.session, "Pasted", "New", item.name),
+    (item) => item.name === null && !hasContent(item.session),
+  );
+  assert.deepEqual(labels, ["Notes 1", "Notes 2"]);
 });

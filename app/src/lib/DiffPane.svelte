@@ -12,10 +12,11 @@
    * fight each other into a feedback loop.
    */
   import CodeLine from "./CodeLine.svelte";
-  import type { AlignedRow, SideName } from "../lib/types";
+  import type { AlignedRow, InlineSegment, SideName } from "../lib/types";
   import type { DisplayItem, Window } from "../lib/viewport";
   import type { Token, TokenSource } from "../lib/syntax";
   import { t } from "../lib/i18nStore";
+  import { searchSlicesFor, type SearchViewState } from "../lib/search";
 
   interface Props {
     side: SideName;
@@ -49,6 +50,10 @@
      */
     scrollTop: number;
     scrollLeft: number;
+    /** Wrapping is a strict no-horizontal-scroll mode. */
+    wrapped: boolean;
+    /** Query hits for this comparison, or null while search is closed. */
+    search: SearchViewState | null;
     onScroll: (offset: { top: number; left: number }) => void;
     onExpandFold: (hunkIndex: number) => void;
     onCollapseFold: (hunkIndex: number) => void;
@@ -66,6 +71,8 @@
     tokens,
     scrollTop,
     scrollLeft,
+    wrapped,
+    search,
     onScroll,
     onExpandFold,
     onCollapseFold,
@@ -84,21 +91,25 @@
    */
   $effect(() => {
     const targetTop = scrollTop;
-    const targetLeft = scrollLeft;
+    const targetLeft = wrapped ? 0 : scrollLeft;
+    const isWrapped = wrapped;
     if (!scroller) return;
     if (Math.abs(scroller.scrollTop - targetTop) > 0.5) {
       scroller.scrollTop = targetTop;
     }
     // Horizontal sync matters for wide lines: without it one pane can show
     // columns the other does not, and the two sides stop lining up visually.
-    if (Math.abs(scroller.scrollLeft - targetLeft) > 0.5) {
+    if (isWrapped && scroller.scrollLeft !== 0) {
+      scroller.scrollLeft = 0;
+    } else if (!isWrapped && Math.abs(scroller.scrollLeft - targetLeft) > 0.5) {
       scroller.scrollLeft = targetLeft;
     }
   });
 
   function handleScroll(): void {
     if (scroller) {
-      onScroll({ top: scroller.scrollTop, left: scroller.scrollLeft });
+      if (wrapped && scroller.scrollLeft !== 0) scroller.scrollLeft = 0;
+      onScroll({ top: scroller.scrollTop, left: wrapped ? 0 : scroller.scrollLeft });
     }
   }
 
@@ -113,12 +124,16 @@
    * re-tokenising the fragment matters: a string split across two physical lines
    * would otherwise be coloured as code on the second one.
    */
-  function tokensFor(item: DisplayItem, lineIndex: number | null): Token[] {
+  function tokensFor(
+    lineIndex: number | null,
+    range: { start: number; end: number },
+    wrapped: boolean,
+  ): Token[] {
     if (tokens === null || lineIndex === null) return [];
     const lineTokens = tokens.get(lineIndex);
-    if (!lineTokens || !item.wrap) return lineTokens ?? [];
+    if (!lineTokens || !wrapped) return lineTokens ?? [];
 
-    const { start, end } = item.wrap;
+    const { start, end } = range;
     const out: Token[] = [];
     let offset = 0;
     for (const token of lineTokens) {
@@ -130,6 +145,43 @@
       const from = Math.max(0, start - tokenStart);
       const to = Math.min(token.text.length, end - tokenStart);
       if (to > from) out.push({ kind: token.kind, text: token.text.slice(from, to) });
+    }
+    return out;
+  }
+
+  /**
+   * Slice inline highlights with the same character range as the displayed text.
+   *
+   * The backend builds segments for the full logical line. Reusing them untouched
+   * on every wrapped slice made each physical line repeat the whole row, and the
+   * character pills stopped lining up with the visible fragment.
+   */
+  function segmentsFor(
+    segments: InlineSegment[],
+    range: { start: number; end: number },
+    wrapped: boolean,
+  ): InlineSegment[] {
+    if (!wrapped || segments.length === 0) return segments;
+
+    const out: InlineSegment[] = [];
+    let offset = 0;
+    for (const segment of segments) {
+      const segmentStart = offset;
+      const segmentEnd = offset + segment.text.length;
+      offset = segmentEnd;
+      if (segmentEnd <= range.start) continue;
+      if (segmentStart >= range.end) break;
+
+      const from = Math.max(0, range.start - segmentStart);
+      const to = Math.min(segment.text.length, range.end - segmentStart);
+      if (to > from) {
+        out.push({
+          ...segment,
+          text: segment.text.slice(from, to),
+          char_start: Math.max(segment.char_start, range.start),
+          char_end: Math.min(segment.char_end, range.end),
+        });
+      }
     }
     return out;
   }
@@ -158,12 +210,19 @@
      * throws `each_key_duplicate`, which aborted the whole render the moment
      * wrapping was switched on. The slice start disambiguates them.
      */
-    return item.wrap ? `row:${item.row}:${item.wrap.start}` : `row:${item.row}`;
+    if (item.wrap) return `row:${item.row}:${item.wrap.start}`;
+    if (item.splitWrap) {
+      const left = item.splitWrap.left?.start ?? "x";
+      const right = item.splitWrap.right?.start ?? "x";
+      return `row:${item.row}:${left}:${right}`;
+    }
+    return `row:${item.row}`;
   }
 </script>
 
 <div
   class="pane"
+  class:wrapped
   bind:this={scroller}
   onscroll={handleScroll}
   role="presentation"
@@ -207,11 +266,32 @@
           {@const segs = side === "left" ? row.left_inline : row.right_inline}
           {@const fullText = line !== null ? (lines[line] ?? "") : ""}
           <!--
-            A wrapped item shows only its own column slice of the logical line.
-            Unwrapped items carry no `wrap`, so `fullText` is the whole line.
+            A wrapped item shows only its own character slice of the logical line.
+            Split-view items carry one range per side because each pane has its own
+            width; a `null` range is the shorter side's blank continuation.
           -->
-          {@const shown = item.wrap ? fullText.slice(item.wrap.start, item.wrap.end) : fullText}
-          {@const continued = item.wrap?.continued ?? false}
+          {@const sideWrap = item.splitWrap ? item.splitWrap[side] : item.wrap}
+          {@const blankContinuation = item.splitWrap !== undefined && sideWrap === null}
+          {@const wrapped = sideWrap !== undefined && sideWrap !== null}
+          {@const range = sideWrap
+            ? {
+                start: sideWrap.start,
+                end: sideWrap.end,
+                text: fullText.slice(sideWrap.start, sideWrap.end),
+              }
+            : blankContinuation
+              ? { start: 0, end: 0, text: "" }
+              : { start: 0, end: fullText.length, text: fullText }}
+          {@const continued = blankContinuation || (sideWrap?.continued ?? false)}
+          {@const searchSlices = search === null
+            ? []
+            : searchSlicesFor(
+                search.hitsByRow.get(item.row) ?? [],
+                side,
+                range.start,
+                range.end,
+                search.active,
+              )}
           <div
             class="row"
             data-key={keyFor(item)}
@@ -226,22 +306,24 @@
                 class="collapse"
                 onclick={() => onCollapseFold(item.collapsedBar!.hunkIndex)}
                 title={$t("fold.collapse", { n: item.collapsedBar.rowCount })}
+                aria-label={$t("fold.collapse", { n: item.collapsedBar.rowCount })}
               >
                 <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
                   <path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
-                {$t("fold.collapseShort", { n: item.collapsedBar.rowCount })}
               </button>
             {/if}
             <CodeLine
               {line}
               active={isActive(item.row)}
               kind={row.kind}
-              segments={segs}
-              text={shown}
+              segments={segmentsFor(segs, range, wrapped)}
+              text={range.text}
               {continued}
               {side}
-              tokens={tokensFor(item, line)}
+              {wrapped}
+              {searchSlices}
+              tokens={tokensFor(line, range, wrapped)}
             />
           </div>
         {/if}
@@ -305,6 +387,19 @@
     contain: layout paint;
   }
 
+  /*
+   * Wrapping removes horizontal scrolling entirely.
+   *
+   * Slicing text is not enough by itself: `width: max-content` on the virtual
+   * window can still preserve a few pixels of overflow, and an old scrollLeft can
+   * then shift every row left. In wrapped mode the window, row and cell are all
+   * constrained to the visible pane width.
+   */
+  .pane.wrapped {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .spacer {
     position: relative;
     width: 100%;
@@ -324,6 +419,12 @@
     width: max-content;
     min-width: 100%;
     will-change: transform;
+  }
+
+  .pane.wrapped .window {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 
   /*
@@ -360,6 +461,12 @@
     position: relative;
     width: 100%;
     min-width: max-content;
+  }
+
+  .pane.wrapped .row {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 
   /* Hover is a 1px hairline, not a background: it must not compete with tints. */
@@ -457,9 +564,9 @@
    * Collapse bar for an *expanded* unchanged run.
    *
    * Deliberately much quieter than a fold bar: it is an affordance on content the
-   * user asked to see, not a stand-in for content that is hidden. A hairline
-   * divider plus a small chevron keeps it out of the way while still making
-   * "collapse this again" discoverable.
+   * user asked to see, not a stand-in for content that is hidden. A small circular
+   * chevron straddles the gutter's trailing padding, like an editor's folding
+   * control, so it is easy to find without covering the line number or code text.
    */
   .collapse {
     /*
@@ -469,43 +576,47 @@
      */
     position: absolute;
     /*
-     * Inset from both edges and only as wide as its label: a full-width bar reads
-     * as a divider and is easy to miss, while a pill-shaped chip reads as a
-     * control you can hit. The original 12px-tall full-width strip had a hit area
-     * that was technically there but practically unfindable.
+     * Centre the 16px control on the gutter/code boundary. The line number ends
+     * 10px before that boundary and the code starts 10px after it, leaving a 2px
+     * gap on each side. With line numbers disabled, `max()` pins the control to
+     * the pane edge while the code's own left padding still keeps it off the text.
      */
-    left: calc(var(--gutter-width) + 8px);
-    top: 2px;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
+    left: max(0px, calc(var(--gutter-width) - 8px));
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 16px;
     height: 16px;
-    padding: 0 9px 0 7px;
+    padding: 0;
+    transform: translateY(-50%);
     border: 1px solid var(--c-border-strong);
-    border-radius: 8px;
+    border-radius: 50%;
     background: var(--c-bg-elevated);
     color: var(--c-text-muted);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    line-height: 1;
-    text-align: left;
-    white-space: nowrap;
     cursor: pointer;
     z-index: 2;
-    /* Always visible but quiet; brightens on hover. Hiding it entirely made the
-       affordance undiscoverable, which is the bug this replaces. */
-    opacity: 0.55;
-    transition: opacity 100ms ease, background-color 100ms ease, color 100ms ease;
+    /* Always visible but quiet; the tooltip carries the unchanged-line count. */
+    opacity: 0.65;
+    transition:
+      opacity 100ms ease,
+      background-color 100ms ease,
+      border-color 100ms ease,
+      color 100ms ease;
   }
 
-  .pane:hover .collapse,
+  .row:hover .collapse,
   .collapse:focus-visible {
     opacity: 1;
   }
 
   .collapse:hover {
-    color: var(--c-text);
+    color: var(--c-accent);
     background: var(--c-bg-sunken);
     border-color: var(--c-accent);
+  }
+
+  .collapse:focus-visible {
+    outline: 2px solid var(--c-accent);
+    outline-offset: 1px;
   }
 </style>

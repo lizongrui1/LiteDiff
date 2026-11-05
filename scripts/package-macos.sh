@@ -15,7 +15,7 @@ BUNDLE_ID="app.litediff.desktop"
 # Version stamped into the bundle and the DMG name. CI passes this from the tag so
 # the artifact is named after the release; a local run falls back to the value in
 # `tauri.conf.json` so the two never disagree by accident.
-VERSION="${VERSION:-$(python3 -c "import json;print(json.load(open('$ROOT/crates/litediff-app/tauri.conf.json'))['version'])" 2>/dev/null || echo 0.1.0)}"
+VERSION="${VERSION:-$(python3 -c "import json;print(json.load(open('$ROOT/crates/litediff-app/tauri.conf.json'))['version'])" 2>/dev/null || echo 0.1.1)}"
 OUT_DIR="$ROOT/dist-macos"
 
 # Architecture of the binary being packaged, for the artifact name. Release
@@ -71,7 +71,18 @@ if [ -f "$SRC_ICON" ]; then
     doubled=$((size * 2))
     sips -z "$doubled" "$doubled" "$SRC_ICON" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
   done
-  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+  if ! iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"; then
+    # Some macOS/iconutil combinations reject otherwise valid iconsets. Pillow
+    # emits the same ICNS container and is already required by the project's
+    # Python tooling, so use it as a deterministic fallback.
+    echo "    (iconutil rejected the iconset; trying Pillow)"
+    python3 - "$SRC_ICON" "$APP/Contents/Resources/AppIcon.icns" <<'PY'
+import sys
+from PIL import Image
+
+Image.open(sys.argv[1]).convert("RGBA").save(sys.argv[2], format="ICNS")
+PY
+  fi
 else
   echo "    (no source icon found; bundling without one)"
 fi

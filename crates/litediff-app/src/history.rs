@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Only what the list needs to render plus what reopening needs to restore. The
 /// diff result is *not* stored: it is derived from the two texts, and a stored
-/// result would go stale the moment the algorithm or an ignore option changed.
+/// result would go stale the moment an ignore option changed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 // Field defaults, so an entry written before a field existed still loads: without
@@ -73,7 +73,6 @@ pub struct HistorySide {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryOptions {
-    pub algorithm: Option<String>,
     pub ignore_whitespace: bool,
     pub ignore_all_whitespace: bool,
     pub ignore_case: bool,
@@ -212,7 +211,11 @@ pub fn list(root: &Path) -> Result<Vec<HistorySummary>, String> {
     }
 
     // Newest first. Timestamps can tie; the id breaks it deterministically.
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
+    out.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     Ok(out)
 }
 
@@ -434,7 +437,11 @@ mod tests {
 
         let removed = prune(&dir.path, 7, 0, now).expect("prune");
         assert_eq!(removed, 1);
-        let ids: Vec<String> = list(&dir.path).expect("list").into_iter().map(|e| e.id).collect();
+        let ids: Vec<String> = list(&dir.path)
+            .expect("list")
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
         assert_eq!(ids, vec!["new"]);
     }
 
@@ -442,11 +449,19 @@ mod tests {
     fn prune_keeps_the_newest_entries_up_to_the_limit() {
         let dir = TempDir::new("prune-count");
         for i in 1..=5 {
-            save(&dir.path, entry(&format!("e{i}"), i as i64 * 1000, "a", "b")).expect("save");
+            save(
+                &dir.path,
+                entry(&format!("e{i}"), i as i64 * 1000, "a", "b"),
+            )
+            .expect("save");
         }
         let removed = prune(&dir.path, 0, 2, 100_000).expect("prune");
         assert_eq!(removed, 3);
-        let ids: Vec<String> = list(&dir.path).expect("list").into_iter().map(|e| e.id).collect();
+        let ids: Vec<String> = list(&dir.path)
+            .expect("list")
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
         assert_eq!(ids, vec!["e5", "e4"], "the newest two survive");
     }
 
@@ -497,7 +512,6 @@ mod tests {
             "right": {"label": "b", "path": null, "text": "y"}
         }"#;
         let parsed: HistoryEntry = serde_json::from_str(json).expect("parse");
-        assert_eq!(parsed.options.algorithm, None);
         assert!(!parsed.options.ignore_whitespace);
     }
 
@@ -516,7 +530,6 @@ mod tests {
             "left": {"label": "a.txt", "path": "/p/a.txt", "text": "one\n"},
             "right": {"label": "pasted", "path": null, "text": "two\n"},
             "options": {
-                "algorithm": "patience",
                 "ignoreWhitespace": true,
                 "ignoreAllWhitespace": false,
                 "ignoreCase": true,
@@ -527,11 +540,23 @@ mod tests {
         assert_eq!(parsed.created_at, 1_700_000_000_000, "createdAt must map");
         assert_eq!(parsed.left.path.as_deref(), Some("/p/a.txt"));
         assert_eq!(parsed.right.path, None);
-        assert_eq!(parsed.options.algorithm.as_deref(), Some("patience"));
         assert!(parsed.options.ignore_whitespace);
         assert!(!parsed.options.ignore_all_whitespace);
         assert!(parsed.options.ignore_case);
         assert!(!parsed.options.intra_line);
+    }
+
+    #[test]
+    fn legacy_entries_with_an_algorithm_still_load() {
+        let json = r#"{
+            "id": "1",
+            "createdAt": 100,
+            "left": {"label": "a", "path": null, "text": "x"},
+            "right": {"label": "b", "path": null, "text": "y"},
+            "options": {"algorithm": "patience", "ignoreWhitespace": true}
+        }"#;
+        let parsed: HistoryEntry = serde_json::from_str(json).expect("legacy entry");
+        assert!(parsed.options.ignore_whitespace);
     }
 
     // An empty id means "assign one", and the assigned id must be usable as a

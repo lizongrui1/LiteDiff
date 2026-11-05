@@ -227,7 +227,7 @@
         <span class="row-label">{$t("settings.scheme")}</span>
         <div class="radios">
           {#each SCHEMES as value (value)}
-            <label class="radio">
+            <label class="radio" class:on={settings.scheme === value}>
               <input
                 type="radio"
                 name="scheme"
@@ -244,24 +244,24 @@
         </div>
       </div>
 
-      <div class="row slider">
-        <label class="row-label" for="set-intensity">{$t("settings.intensity")}</label>
-        <div class="field">
-          <input
-            id="set-intensity"
-            type="range"
-            min="0"
-            max="2"
-            step="1"
-            value={["soft", "normal", "strong"].indexOf(settings.intensity)}
-            style:--fill={fillPercent(["soft", "normal", "strong"].indexOf(settings.intensity), 0, 2)}
-            oninput={(e) =>
-              onPatch({
-                intensity: (["soft", "normal", "strong"] as const)[Number(e.currentTarget.value)],
-              })}
-          />
-          <span class="value">{$t(INTENSITY_KEYS[settings.intensity])}</span>
+      <div class="slider-row">
+        <div class="slider-head">
+          <label class="row-label" for="set-intensity">{$t("settings.intensity")}</label>
+          <span class="value-pill">{$t(INTENSITY_KEYS[settings.intensity])}</span>
         </div>
+        <input
+          id="set-intensity"
+          type="range"
+          min="0"
+          max="2"
+          step="1"
+          value={["soft", "normal", "strong"].indexOf(settings.intensity)}
+          style:--fill={fillPercent(["soft", "normal", "strong"].indexOf(settings.intensity), 0, 2)}
+          oninput={(e) =>
+            onPatch({
+              intensity: (["soft", "normal", "strong"] as const)[Number(e.currentTarget.value)],
+            })}
+        />
       </div>
 
       <label class="row">
@@ -307,38 +307,38 @@
     <section>
       <h3>{$t("settings.section.type")}</h3>
 
-      <div class="row slider">
-        <label class="row-label" for="set-font">{$t("settings.fontSize")}</label>
-        <div class="field">
-          <input
-            id="set-font"
-            type="range"
-            min={LIMITS.fontSize.min}
-            max={LIMITS.fontSize.max}
-            step={LIMITS.fontSize.step}
-            value={settings.fontSize}
-            style:--fill={fillPercent(settings.fontSize, LIMITS.fontSize.min, LIMITS.fontSize.max)}
-            oninput={(e) => onPatch({ fontSize: Number(e.currentTarget.value) })}
-          />
-          <span class="value">{settings.fontSize}px</span>
+      <div class="slider-row">
+        <div class="slider-head">
+          <label class="row-label" for="set-font">{$t("settings.fontSize")}</label>
+          <span class="value-pill">{settings.fontSize}px</span>
         </div>
+        <input
+          id="set-font"
+          type="range"
+          min={LIMITS.fontSize.min}
+          max={LIMITS.fontSize.max}
+          step={LIMITS.fontSize.step}
+          value={settings.fontSize}
+          style:--fill={fillPercent(settings.fontSize, LIMITS.fontSize.min, LIMITS.fontSize.max)}
+          oninput={(e) => onPatch({ fontSize: Number(e.currentTarget.value) })}
+        />
       </div>
 
-      <div class="row slider">
-        <label class="row-label" for="set-lh">{$t("settings.lineHeight")}</label>
-        <div class="field">
-          <input
-            id="set-lh"
-            type="range"
-            min={LIMITS.lineHeight.min}
-            max={LIMITS.lineHeight.max}
-            step={LIMITS.lineHeight.step}
-            value={settings.lineHeight}
-            style:--fill={fillPercent(settings.lineHeight, LIMITS.lineHeight.min, LIMITS.lineHeight.max)}
-            oninput={(e) => onPatch({ lineHeight: Number(e.currentTarget.value) })}
-          />
-          <span class="value">{rowHeight}px</span>
+      <div class="slider-row">
+        <div class="slider-head">
+          <label class="row-label" for="set-lh">{$t("settings.lineHeight")}</label>
+          <span class="value-pill">{rowHeight}px</span>
         </div>
+        <input
+          id="set-lh"
+          type="range"
+          min={LIMITS.lineHeight.min}
+          max={LIMITS.lineHeight.max}
+          step={LIMITS.lineHeight.step}
+          value={settings.lineHeight}
+          style:--fill={fillPercent(settings.lineHeight, LIMITS.lineHeight.min, LIMITS.lineHeight.max)}
+          oninput={(e) => onPatch({ lineHeight: Number(e.currentTarget.value) })}
+        />
       </div>
     </section>
 
@@ -379,21 +379,21 @@
         </div>
       </label>
 
-      <div class="row slider" class:disabled={!settings.autoFold}>
-        <label class="row-label" for="set-threshold">{$t("settings.foldThreshold")}</label>
-        <div class="field">
-          <input
-            id="set-threshold"
-            type="range"
-            min={LIMITS.foldThreshold.min}
-            max={LIMITS.foldThreshold.max}
-            step={LIMITS.foldThreshold.step}
-            value={settings.foldThreshold}
-            style:--fill={fillPercent(settings.foldThreshold, LIMITS.foldThreshold.min, LIMITS.foldThreshold.max)}
-            oninput={(e) => onPatch({ foldThreshold: Number(e.currentTarget.value) })}
-          />
-          <span class="value">{$t("edit.lines", { n: settings.foldThreshold })}</span>
+      <div class="slider-row" class:disabled={!settings.autoFold}>
+        <div class="slider-head">
+          <label class="row-label" for="set-threshold">{$t("settings.foldThreshold")}</label>
+          <span class="value-pill">{$t("edit.lines", { n: settings.foldThreshold })}</span>
         </div>
+        <input
+          id="set-threshold"
+          type="range"
+          min={LIMITS.foldThreshold.min}
+          max={LIMITS.foldThreshold.max}
+          step={LIMITS.foldThreshold.step}
+          value={settings.foldThreshold}
+          style:--fill={fillPercent(settings.foldThreshold, LIMITS.foldThreshold.min, LIMITS.foldThreshold.max)}
+          oninput={(e) => onPatch({ foldThreshold: Number(e.currentTarget.value) })}
+        />
       </div>
 
       <!--
@@ -401,21 +401,21 @@
         is the fast path; this row is the discoverable one, and it is the only
         way to set an exact value with the keyboard's coarse steps.
       -->
-      <div class="row slider">
-        <label class="row-label" for="set-split">{$t("settings.splitRatio")}</label>
-        <div class="field">
-          <input
-            id="set-split"
-            type="range"
-            min={LIMITS.splitRatio.min}
-            max={LIMITS.splitRatio.max}
-            step={LIMITS.splitRatio.step}
-            value={settings.splitRatio}
-            style:--fill={fillPercent(settings.splitRatio, LIMITS.splitRatio.min, LIMITS.splitRatio.max)}
-            oninput={(e) => onPatch({ splitRatio: Number(e.currentTarget.value) })}
-          />
-          <span class="value">{Math.round(settings.splitRatio * 100)} : {100 - Math.round(settings.splitRatio * 100)}</span>
+      <div class="slider-row">
+        <div class="slider-head">
+          <label class="row-label" for="set-split">{$t("settings.splitRatio")}</label>
+          <span class="value-pill">{Math.round(settings.splitRatio * 100)} : {100 - Math.round(settings.splitRatio * 100)}</span>
         </div>
+        <input
+          id="set-split"
+          type="range"
+          min={LIMITS.splitRatio.min}
+          max={LIMITS.splitRatio.max}
+          step={LIMITS.splitRatio.step}
+          value={settings.splitRatio}
+          style:--fill={fillPercent(settings.splitRatio, LIMITS.splitRatio.min, LIMITS.splitRatio.max)}
+          oninput={(e) => onPatch({ splitRatio: Number(e.currentTarget.value) })}
+        />
       </div>
     </section>
 
@@ -520,7 +520,7 @@
       -->
       <div class="row">
         <label class="row-label" for="set-locale">{$t("settings.language")}</label>
-        <div class="field">
+        <div class="select-shell">
           <select
             id="set-locale"
             class="select"
@@ -532,6 +532,16 @@
               <option value={code}>{LOCALE_META[code].native}</option>
             {/each}
           </select>
+          <svg class="select-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+            <path
+              d="m3 4.5 3 3 3-3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
         </div>
       </div>
     </section>
@@ -580,15 +590,16 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 36px;
-    padding: 0 8px 0 12px;
+    height: 40px;
+    padding: 0 10px 0 14px;
     border-bottom: 1px solid var(--c-border);
   }
 
   h2 {
     margin: 0;
-    font-size: 12px;
-    font-weight: 590;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
     color: var(--c-text);
   }
 
@@ -625,11 +636,11 @@
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 4px 0 8px;
+    padding: 5px 0 10px;
   }
 
   section {
-    padding: 10px 12px 12px;
+    padding: 12px 12px 14px;
     border-bottom: 1px solid var(--c-border);
   }
 
@@ -638,12 +649,26 @@
   }
 
   h3 {
-    margin: 0 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 9px;
     font-size: 10px;
-    font-weight: 590;
-    letter-spacing: 0.04em;
+    font-weight: 650;
+    letter-spacing: 0.055em;
     text-transform: uppercase;
     color: var(--c-text-faint);
+  }
+
+  /* A single accent tick gives each section a quiet anchor without turning the
+     sheet into a stack of cards. */
+  h3::before {
+    content: "";
+    width: 3px;
+    height: 9px;
+    border-radius: 999px;
+    background: var(--c-accent);
+    opacity: 0.72;
   }
 
   /*
@@ -660,12 +685,24 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    min-height: 28px;
+    gap: 12px;
+    min-height: 31px;
   }
 
   .row.disabled {
-    opacity: 0.45;
+    opacity: 0.42;
+  }
+
+  label.row {
+    margin: 0 -4px;
+    padding: 0 4px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 100ms ease;
+  }
+
+  label.row:hover {
+    background: var(--c-bg);
   }
 
   .row-label {
@@ -698,59 +735,68 @@
   .radios {
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    padding-top: 3px;
+    gap: 5px;
+    padding-top: 4px;
   }
 
-  /*
-   * Slider rows trade the track's length for a single-line label.
-   *
-   * "Schwelle fürs Einklappen" is 153px and "Umbral de contracción" 139px; beside
-   * a 96px track and a 44px readout they did not fit a 305px interior, so the label
-   * wrapped onto two lines while every neighbouring label stayed on one — the only
-   * inconsistency left after the sheet width was fixed. The track is the item that
-   * can give way: the value is repeated in the readout, and the knob's position is
-   * still legible at 56px.
-   */
-  .row.slider .row-label {
-    /*
-     * `flex: 1 0 auto` — grow into spare space, never shrink below the text.
-     *
-     * The label keeps its natural width (so it is never truncated) and the track,
-     * which is `flex: 0 1 96px`, absorbs the remainder. In German the label needs
-     * 139px, leaving a 78px track: short, but the readout beside it carries the
-     * exact value, so nothing is lost.
-     */
-    flex: 1 0 auto;
-    white-space: nowrap;
-  }
-
-  /*
-   * Value readout on a slider row.
-   *
-   * `min-width` is a floor, not a cap: the earlier `min-width: 44px` with no upper
-   * bound let "10 Zeilen" (German) take 82px and push the track + readout past the
-   * row by 7px. The clamp keeps the readout one column wide and truncates with an
-   * ellipsis in the rare language that needs more.
-   */
+  /* Unit readout beside the compact number fields. */
   .value {
     flex: 0 0 auto;
-    min-width: 44px;
-    max-width: 72px;
+    min-width: 22px;
     overflow: hidden;
     font-size: 11px;
-    text-align: right;
+    text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
     color: var(--c-text-muted);
   }
 
+  /*
+   * A slider gets its own block instead of sharing a 305px row with its label.
+   * The full-width track is both easier to hit and visually quieter than a
+   * 56–96px stub squeezed between two columns of text.
+   */
+  .slider-row {
+    padding: 8px 0 7px;
+  }
+
+  .slider-row.disabled {
+    opacity: 0.42;
+  }
+
+  .slider-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  .value-pill {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    height: 22px;
+    padding: 0 8px;
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    background: var(--c-bg);
+    color: var(--c-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   /* --- segmented control ------------------------------------------------ */
   .segmented {
     display: inline-flex;
-    padding: 1px;
-    border-radius: 6px;
+    padding: 2px;
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
     background: var(--c-bg-sunken);
   }
 
@@ -758,10 +804,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 20px;
+    height: 22px;
     padding: 0 7px;
     border: none;
-    border-radius: 5px;
+    border-radius: 6px;
     background: transparent;
     color: var(--c-text-muted);
     font-family: inherit;
@@ -789,7 +835,9 @@
   .seg.on {
     background: var(--c-bg);
     color: var(--c-text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    box-shadow:
+      0 0 0 1px var(--c-border),
+      0 1px 2px rgba(0, 0, 0, 0.1);
   }
 
   /* --- accent swatches -------------------------------------------------- */
@@ -800,20 +848,28 @@
   }
 
   .swatch {
-    width: 16px;
-    height: 16px;
+    width: 17px;
+    height: 17px;
     padding: 0;
-    border: 1px solid var(--c-border-strong);
+    border: 2px solid var(--c-bg-elevated);
     border-radius: 50%;
     background: var(--swatch);
     cursor: pointer;
+    box-shadow: 0 0 0 1px var(--c-border-strong);
+    transition:
+      transform 100ms ease,
+      box-shadow 100ms ease;
+  }
+
+  .swatch:hover {
+    transform: scale(1.08);
   }
 
   /* Selected swatch gets a ring made of two shadows, so it needs no layout. */
   .swatch.on {
     box-shadow:
       0 0 0 1px var(--c-bg-elevated),
-      0 0 0 2.5px var(--c-text-muted);
+      0 0 0 2.5px var(--c-accent);
   }
 
   .custom-color {
@@ -849,21 +905,60 @@
   .radio {
     display: flex;
     align-items: flex-start;
-    gap: 6px;
-    padding: 3px 0;
+    gap: 9px;
+    padding: 7px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition:
+      background 100ms ease,
+      border-color 100ms ease;
+  }
+
+  .radio:hover {
+    background: var(--c-bg);
+  }
+
+  .radio.on {
+    border-color: var(--c-border);
+    background: var(--c-selection);
+  }
+
+  .radio input {
+    position: relative;
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 1px 0 0;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1.5px solid var(--c-border-strong);
+    border-radius: 50%;
+    background: var(--c-bg);
     cursor: pointer;
   }
 
-  .radio input,
-  .row input[type="checkbox"] {
-    margin: 1px 0 0;
-    accent-color: var(--c-accent);
+  .radio input:checked {
+    border-color: var(--c-accent);
+  }
+
+  .radio input:checked::after {
+    content: "";
+    position: absolute;
+    inset: 2.5px;
+    border-radius: 50%;
+    background: var(--c-accent);
+  }
+
+  .radio input:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--c-selection);
   }
 
   .radio-text {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 2px;
   }
 
   .radio-name {
@@ -877,51 +972,71 @@
     color: var(--c-text-faint);
   }
 
-  /* --- range ----------------------------------------------------------- */
+  /* --- switches -------------------------------------------------------- */
   /*
-   * Custom slider, replacing the platform default.
-   *
-   * The native control is a thick grey groove with a large rounded thumb, tuned
-   * for touch targets in a settings dialog — at 96px wide in a 26px row it read as
-   * a foreign element next to the 1px borders and 11px labels everywhere else.
-   *
-   * This version: a 3px track, the filled portion tinted with the user's accent
-   * (so the value is legible without reading the number), and a 12px circular
-   * thumb with a hairline and a soft shadow so it stays visible on both themes.
-   *
-   * Implemented with `::-webkit-slider-*`, which is what WKWebView (the macOS
-   * app's engine) and Chromium both use. The `::-moz-range-*` rules are provided
-   * too so `npm run dev` in Firefox does not fall back to the native control.
+   * Checkboxes become compact switches. The native blue square is the one
+   * platform control that visibly ignores the app accent and reads much heavier
+   * than the hairlines around it.
    */
-  input[type="range"] {
-    /* `appearance: none` removes the native groove that would otherwise paint
-       over the track painted by the pseudo-element below. */
+  .row input[type="checkbox"] {
+    position: relative;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 18px;
+    margin: 0;
     appearance: none;
     -webkit-appearance: none;
-    /*
-     * `flex: 0 1 96px` instead of `width: 96px`.
-     *
-     * The track is the one thing in a slider row that can afford to get shorter:
-     * its value is also written in the readout beside it. Letting it shrink means a
-     * long label ("Schwelle fürs Einklappen") keeps its width and the row stays
-     * inside the panel, where a fixed 96px track pushed the pair 8px past the edge
-     * in German and Spanish.
-     */
-    flex: 0 1 96px;
-    min-width: 56px;
-    height: 16px;
+    border: 1px solid var(--c-border-strong);
+    border-radius: 999px;
+    background: var(--c-bg-sunken);
+    cursor: pointer;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .row input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--c-text-faint);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    transition:
+      transform 120ms ease,
+      background 120ms ease;
+  }
+
+  .row input[type="checkbox"]:checked {
+    border-color: var(--c-accent);
+    background: var(--c-accent);
+  }
+
+  .row input[type="checkbox"]:checked::after {
+    transform: translateX(12px);
+    background: #fff;
+  }
+
+  .row input[type="checkbox"]:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--c-selection);
+  }
+
+  /* --- range ----------------------------------------------------------- */
+  input[type="range"] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    width: 100%;
+    height: 18px;
     margin: 0;
     background: transparent;
     cursor: pointer;
   }
 
-  /*
-   * The filled/unfilled split.
-   *
-   * `--fill` is set per element from the component's inline style, because CSS
-   * cannot read a range input's value. The 50% fallback keeps the control sensible
-   * if that attribute is ever missing.
-   */
   /*
    * Pseudo-elements are where Svelte's scoping hurts.
    *
@@ -931,68 +1046,73 @@
    * `:global`, anchored on `.sheet` so nothing outside this panel is affected.
    */
   :global(.sheet input[type="range"])::-webkit-slider-runnable-track {
-    height: 3px;
-    border-radius: 2px;
+    height: 4px;
+    border-radius: 999px;
     background: linear-gradient(
       to right,
       var(--c-accent) 0 var(--fill, 50%),
       var(--c-border-strong) var(--fill, 50%) 100%
     );
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
   }
 
   :global(.sheet input[type="range"])::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 12px;
-    height: 12px;
-    /* Centres a 12px thumb on a 3px track: (12 - 3) / 2. */
-    margin-top: -4.5px;
+    width: 14px;
+    height: 14px;
+    /* Centres a 14px thumb on a 4px track: (14 - 4) / 2. */
+    margin-top: -5px;
     border-radius: 50%;
-    border: 1px solid var(--c-border-strong);
-    background: var(--c-bg);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    border: 2px solid var(--c-bg-elevated);
+    background: var(--c-accent);
+    box-shadow:
+      0 0 0 1px var(--c-border-strong),
+      0 2px 4px rgba(0, 0, 0, 0.2);
     transition:
-      transform 90ms ease,
-      box-shadow 90ms ease;
+      transform 100ms ease,
+      box-shadow 100ms ease;
   }
 
-  /* Grow slightly on hover and focus: feedback without a colour change. */
   :global(.sheet input[type="range"]:hover)::-webkit-slider-thumb {
-    transform: scale(1.12);
+    transform: scale(1.08);
   }
 
   :global(.sheet input[type="range"]:focus-visible)::-webkit-slider-thumb {
-    transform: scale(1.12);
+    transform: scale(1.08);
     box-shadow:
-      0 0 0 2px var(--c-accent),
-      0 1px 2px rgba(0, 0, 0, 0.18);
+      0 0 0 3px var(--c-selection),
+      0 0 0 1px var(--c-accent),
+      0 2px 4px rgba(0, 0, 0, 0.2);
   }
 
   input[type="range"]:disabled {
     cursor: default;
-    opacity: 0.45;
+    opacity: 0.4;
   }
 
   /* --- range: Firefox -------------------------------------------------- */
   :global(.sheet input[type="range"])::-moz-range-track {
-    height: 3px;
-    border-radius: 2px;
+    height: 4px;
+    border-radius: 999px;
     background: var(--c-border-strong);
   }
 
   :global(.sheet input[type="range"])::-moz-range-progress {
-    height: 3px;
-    border-radius: 2px;
+    height: 4px;
+    border-radius: 999px;
     background: var(--c-accent);
   }
 
   :global(.sheet input[type="range"])::-moz-range-thumb {
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
-    border: 1px solid var(--c-border-strong);
-    background: var(--c-bg);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    border: 2px solid var(--c-bg-elevated);
+    background: var(--c-accent);
+    box-shadow:
+      0 0 0 1px var(--c-border-strong),
+      0 2px 4px rgba(0, 0, 0, 0.2);
   }
 
   /* --- footer ---------------------------------------------------------- */
@@ -1001,7 +1121,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 34px;
+    height: 42px;
     padding: 0 12px;
     border-top: 1px solid var(--c-border);
     background: var(--c-bg-sunken);
@@ -1030,18 +1150,27 @@
   .reset {
     flex: 1 1 auto;
     min-width: 0;
-    height: 22px;
-    padding: 0 9px;
-    border: 1px solid var(--c-border-strong);
-    border-radius: 5px;
+    height: 28px;
+    padding: 0 11px;
+    border: 1px solid var(--c-border);
+    border-radius: 7px;
     background: var(--c-bg);
     color: var(--c-text);
     font-family: inherit;
-    font-size: 11px;
+    font-size: 11.5px;
+    font-weight: 560;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition:
+      background 100ms ease,
+      border-color 100ms ease;
+  }
+
+  .reset:hover:not(:disabled) {
+    border-color: var(--c-border-strong);
+    background: var(--c-bg-elevated);
   }
 
   .reset:disabled {
@@ -1080,39 +1209,80 @@
 
   /* --- numeric and popup inputs ---------------------------------------- */
   /*
-   * Number and select controls share one look: a 22px box with the same hairline,
-   * radius and background as the footer button beside it.
-   *
-   * The number field is sized for four digits plus a spinner rather than by
-   * `max` — a `width: auto` field grows to the widest value it *could* hold, which
-   * left the row label and its control drifting apart.
+   * Number and select controls share one quiet field surface: a 28px box, a
+   * hairline that strengthens on hover, and an accent wash only while focused.
+   * Native spinners and the native select arrow are hidden because both read as
+   * unstyled platform chrome against the rest of the editor.
    */
   input[type="number"],
   .select {
-    height: 22px;
-    padding: 0 4px;
-    border: 1px solid var(--c-border-strong);
-    border-radius: 5px;
+    height: 28px;
+    border: 1px solid var(--c-border);
+    border-radius: 7px;
     background: var(--c-bg);
     color: var(--c-text);
-    font-family: inherit;
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
     font-variant-numeric: tabular-nums;
+    transition:
+      border-color 100ms ease,
+      box-shadow 100ms ease,
+      background 100ms ease;
+  }
+
+  input[type="number"]:hover,
+  .select:hover {
+    border-color: var(--c-border-strong);
+  }
+
+  input[type="number"]:focus-visible,
+  .select:focus-visible {
+    outline: none;
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 3px var(--c-selection);
   }
 
   input[type="number"] {
-    width: 58px;
+    width: 66px;
+    padding: 0 8px;
     text-align: right;
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    margin: 0;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .select-shell {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: 148px;
   }
 
   .select {
-    max-width: 132px;
-    padding: 0 2px;
+    width: 100%;
+    max-width: 148px;
+    padding: 0 27px 0 9px;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+  }
+
+  .select-chevron {
+    position: absolute;
+    right: 9px;
+    color: var(--c-text-faint);
+    pointer-events: none;
   }
 
   input[type="number"]:disabled,
   .select:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: default;
   }
 </style>

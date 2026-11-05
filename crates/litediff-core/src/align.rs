@@ -20,9 +20,7 @@
 //! Padding is what guarantees `left.len() == right.len()` per block, which is the
 //! precondition for strict scroll synchronisation in Step 3.
 
-use crate::model::{
-    AlignedRow, ChangeTag, DiffOptions, DiffStats, Hunk, LineOp, RowKind,
-};
+use crate::model::{AlignedRow, ChangeTag, DiffOptions, DiffStats, Hunk, LineOp, RowKind};
 use crate::source::SourceText;
 use crate::token;
 
@@ -33,7 +31,8 @@ pub fn build(
     ops: &[LineOp],
     options: &DiffOptions,
 ) -> (Vec<AlignedRow>, Vec<Hunk>, DiffStats) {
-    let mut rows: Vec<AlignedRow> = Vec::with_capacity((left.line_count() + right.line_count()) as usize);
+    let mut rows: Vec<AlignedRow> =
+        Vec::with_capacity((left.line_count() + right.line_count()) as usize);
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut stats = DiffStats::default();
     let mut pending_delete: Option<(u32, u32)> = None; // (start, len)
@@ -42,35 +41,39 @@ pub fn build(
     // Flush a replacement block: pair `min(del, ins)` lines into Modify rows,
     // then pad the longer side. Appending the rows here is what keeps the two
     // columns at equal height for strict scroll sync.
-    let flush_change =
-        |rows: &mut Vec<AlignedRow>,
-         hunks: &mut Vec<Hunk>,
-         pending_delete: &mut Option<(u32, u32)>,
-         pending_insert: &mut Option<(u32, u32)>| {
-            let (del_start, del_len) = pending_delete.take().unwrap_or((0, 0));
-            let (ins_start, ins_len) = pending_insert.take().unwrap_or((0, 0));
-            if del_len == 0 && ins_len == 0 {
-                return;
-            }
-            let row_start = rows.len() as u32;
-            for (left, right, kind) in pair_block(del_start, del_len, ins_start, ins_len) {
-                rows.push(AlignedRow::plain(left, right, kind));
-            }
-            hunks.push(Hunk {
-                equal: false,
-                left_start: del_start,
-                left_len: del_len,
-                right_start: ins_start,
-                right_len: ins_len,
-                row_start,
-                row_len: rows.len() as u32 - row_start,
-            });
-        };
+    let flush_change = |rows: &mut Vec<AlignedRow>,
+                        hunks: &mut Vec<Hunk>,
+                        pending_delete: &mut Option<(u32, u32)>,
+                        pending_insert: &mut Option<(u32, u32)>| {
+        let (del_start, del_len) = pending_delete.take().unwrap_or((0, 0));
+        let (ins_start, ins_len) = pending_insert.take().unwrap_or((0, 0));
+        if del_len == 0 && ins_len == 0 {
+            return;
+        }
+        let row_start = rows.len() as u32;
+        for (left, right, kind) in pair_block(del_start, del_len, ins_start, ins_len) {
+            rows.push(AlignedRow::plain(left, right, kind));
+        }
+        hunks.push(Hunk {
+            equal: false,
+            left_start: del_start,
+            left_len: del_len,
+            right_start: ins_start,
+            right_len: ins_len,
+            row_start,
+            row_len: rows.len() as u32 - row_start,
+        });
+    };
 
     for op in ops {
         match op.tag {
             ChangeTag::Equal => {
-                flush_change(&mut rows, &mut hunks, &mut pending_delete, &mut pending_insert);
+                flush_change(
+                    &mut rows,
+                    &mut hunks,
+                    &mut pending_delete,
+                    &mut pending_insert,
+                );
                 debug_assert_eq!(op.left_len, op.right_len);
                 let row_start = rows.len() as u32;
                 for i in 0..op.left_len {
@@ -99,7 +102,12 @@ pub fn build(
             }
         }
     }
-    flush_change(&mut rows, &mut hunks, &mut pending_delete, &mut pending_insert);
+    flush_change(
+        &mut rows,
+        &mut hunks,
+        &mut pending_delete,
+        &mut pending_insert,
+    );
 
     // Second pass: attach intra-line segments to Modify rows.
     if options.intra_line {
@@ -146,11 +154,7 @@ pub fn pair_block(
     let mut out = Vec::with_capacity(left_len.max(right_len) as usize);
 
     for i in 0..paired {
-        out.push((
-            Some(left_start + i),
-            Some(right_start + i),
-            RowKind::Modify,
-        ));
+        out.push((Some(left_start + i), Some(right_start + i), RowKind::Modify));
     }
     for i in paired..left_len {
         out.push((Some(left_start + i), None, RowKind::Delete));

@@ -35,6 +35,9 @@
     editing: boolean;
     /** Enter or leave edit mode. */
     onToggleEdit: () => void;
+    /** True while the in-comparison search bar is showing. */
+    searchOpen: boolean;
+    onToggleSearch: () => void;
     position: {
       changeIndex: number;
       changeTotal: number;
@@ -71,6 +74,8 @@
     onToggleSettings,
     editing,
     onToggleEdit,
+    searchOpen,
+    onToggleSearch,
     wrapLines,
     onToggleWrap,
     gitOpen,
@@ -80,7 +85,6 @@
   }: Props = $props();
 
   const ignoreWhitespace = $derived(session?.options.ignore_whitespace ?? false);
-  const patience = $derived(session?.options.algorithm === "patience");
   const changeCount = $derived(stats.added + stats.deleted + stats.modified);
 
   /** Localised display name of an appearance mode, for the tooltip and label. */
@@ -300,6 +304,20 @@
         />
       </svg>
     </button>
+    <button
+      class="btn icon"
+      class:active={searchOpen}
+      disabled={!session}
+      onclick={onToggleSearch}
+      title={$t("toolbar.searchTitle")}
+      aria-label={$t("toolbar.search")}
+      aria-pressed={searchOpen}
+    >
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <circle cx="6.7" cy="6.7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.35" />
+        <path d="m10 10 3.3 3.3" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" />
+      </svg>
+    </button>
   </div>
 
   <div class="sep"></div>
@@ -342,15 +360,6 @@
       aria-pressed={ignoreWhitespace}
     >
       {$t("toolbar.ignoreWhitespace")}
-    </button>
-    <button
-      class="btn"
-      class:active={patience}
-      onclick={() => onOptions({ algorithm: patience ? "myers" : "patience" })}
-      title={$t("toolbar.algorithmTitle")}
-      aria-pressed={patience}
-    >
-      {patience ? "Patience" : "Myers"}
     </button>
   </div>
 

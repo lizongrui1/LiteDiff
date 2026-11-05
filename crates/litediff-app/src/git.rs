@@ -475,7 +475,10 @@ fn check_branch(name: &str) -> Result<(), String> {
     let forbidden = [
         ' ', '\t', '\n', '\r', '~', '^', ':', '?', '*', '[', '\\', '\u{7f}',
     ];
-    if name.chars().any(|c| forbidden.contains(&c) || c.is_control()) {
+    if name
+        .chars()
+        .any(|c| forbidden.contains(&c) || c.is_control())
+    {
         return Err(format!("分支名含有非法字符：{name}"));
     }
     if name.contains("..") || name.contains("@{") || name.contains("//") {
@@ -551,11 +554,7 @@ pub fn list_branches(repo: &str) -> Result<Vec<BranchInfo>, String> {
     // Current branch first, then newest. Comparing across branches is the reason
     // this list exists, and the branch you are on is the one you compare *from*
     // most of the time.
-    branches.sort_by(|a, b| {
-        b.current
-            .cmp(&a.current)
-            .then_with(|| b.date.cmp(&a.date))
-    });
+    branches.sort_by(|a, b| b.current.cmp(&a.current).then_with(|| b.date.cmp(&a.date)));
     Ok(branches)
 }
 
@@ -585,7 +584,14 @@ pub fn diff_files(repo: &str, left: &str, right: &str) -> Result<Vec<ChangedFile
 
     let numstat_out = run_text(
         Path::new(repo),
-        &["diff", "--numstat", "-z", "--no-renames", &left_sha, &right_sha],
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--no-renames",
+            &left_sha,
+            &right_sha,
+        ],
     )?;
 
     // One entry per path, so the two streams can be joined without depending on
@@ -621,10 +627,7 @@ pub fn diff_files(repo: &str, left: &str, right: &str) -> Result<Vec<ChangedFile
         if path.is_empty() {
             continue;
         }
-        let (added, deleted) = counts
-            .get(path)
-            .copied()
-            .unwrap_or((Some(0), Some(0)));
+        let (added, deleted) = counts.get(path).copied().unwrap_or((Some(0), Some(0)));
         files.push(ChangedFile {
             path: path.to_string(),
             status: status.chars().next().unwrap_or('M').to_string(),
@@ -688,11 +691,8 @@ mod tests {
 
     impl TempRepo {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "litediff-git-{}-{}",
-                name,
-                std::process::id()
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("litediff-git-{}-{}", name, std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("create temp repo");
             let t = TempRepo { dir };
@@ -752,7 +752,11 @@ mod tests {
         assert_eq!(info.relative_path, "src/main.rs");
         assert_eq!(info.branch, "main");
         assert!(info.root.ends_with(
-            repo.dir.file_name().expect("name").to_string_lossy().as_ref()
+            repo.dir
+                .file_name()
+                .expect("name")
+                .to_string_lossy()
+                .as_ref()
         ));
     }
 
@@ -798,7 +802,10 @@ mod tests {
         let repo = TempRepo::new("empty");
         repo.write("a.txt", "uncommitted\n");
         let commits = log_for_file(&repo.path(), "a.txt", 10).expect("log");
-        assert!(commits.is_empty(), "a fresh repo has no history, not an error");
+        assert!(
+            commits.is_empty(),
+            "a fresh repo has no history, not an error"
+        );
     }
 
     #[test]
@@ -806,7 +813,9 @@ mod tests {
         let repo = TempRepo::new("show");
         repo.write("a.txt", "v1\n");
         repo.commit("first");
-        let first = log_for_file(&repo.path(), "a.txt", 10).expect("log")[0].sha.clone();
+        let first = log_for_file(&repo.path(), "a.txt", 10).expect("log")[0]
+            .sha
+            .clone();
 
         repo.write("a.txt", "v2\n");
         repo.commit("second");
@@ -827,7 +836,9 @@ mod tests {
         let repo = TempRepo::new("dirty");
         repo.write("a.txt", "committed\n");
         repo.commit("first");
-        let sha = log_for_file(&repo.path(), "a.txt", 10).expect("log")[0].sha.clone();
+        let sha = log_for_file(&repo.path(), "a.txt", 10).expect("log")[0]
+            .sha
+            .clone();
 
         repo.write("a.txt", "edited but not staged\n");
 
@@ -842,7 +853,9 @@ mod tests {
         let repo = TempRepo::new("missing");
         repo.write("a.txt", "a\n");
         repo.commit("first");
-        let first = log_for_file(&repo.path(), "a.txt", 10).expect("log")[0].sha.clone();
+        let first = log_for_file(&repo.path(), "a.txt", 10).expect("log")[0]
+            .sha
+            .clone();
 
         repo.write("b.txt", "b\n");
         repo.commit("add b");
@@ -864,11 +877,15 @@ mod tests {
 
         // Any rev spec git understands must work, not just full SHAs.
         assert_eq!(
-            show_file(&repo.path(), "HEAD~1", "a.txt").expect("head~1").text,
+            show_file(&repo.path(), "HEAD~1", "a.txt")
+                .expect("head~1")
+                .text,
             "v1\n"
         );
         assert_eq!(
-            show_file(&repo.path(), "main", "a.txt").expect("branch").text,
+            show_file(&repo.path(), "main", "a.txt")
+                .expect("branch")
+                .text,
             "v2\n"
         );
         assert_eq!(
@@ -924,7 +941,9 @@ mod tests {
         let commits = log_for_file(&repo.path(), name, 10).expect("log");
         assert_eq!(commits.len(), 1);
         assert_eq!(
-            show_file(&repo.path(), &commits[0].sha, name).expect("show").text,
+            show_file(&repo.path(), &commits[0].sha, name)
+                .expect("show")
+                .text,
             "content\n"
         );
     }
@@ -970,9 +989,17 @@ mod tests {
             repo.commit(&format!("c{i}"));
         }
         // A zero limit must not produce "no commits"; it is clamped to at least 1.
-        assert_eq!(log_for_file(&repo.path(), "a.txt", 0).expect("log").len(), 1);
+        assert_eq!(
+            log_for_file(&repo.path(), "a.txt", 0).expect("log").len(),
+            1
+        );
         // A request above the cap is clamped, not rejected.
-        assert_eq!(log_for_file(&repo.path(), "a.txt", 10_000).expect("log").len(), 5);
+        assert_eq!(
+            log_for_file(&repo.path(), "a.txt", 10_000)
+                .expect("log")
+                .len(),
+            5
+        );
     }
 
     #[test]
@@ -1003,7 +1030,11 @@ mod tests {
 
         let blob = show_file(&repo.path(), "HEAD", "blob.bin").expect("show binary");
         assert!(!blob.text.is_empty());
-        assert_eq!(blob.warnings.len(), 1, "the UI must be told the view is lossy");
+        assert_eq!(
+            blob.warnings.len(),
+            1,
+            "the UI must be told the view is lossy"
+        );
     }
 
     // --- branches ----------------------------------------------------------

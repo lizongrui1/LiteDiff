@@ -21,6 +21,30 @@
 import { metrics } from "./theme";
 import type { Hunk } from "./types";
 
+/** One physical slice of a logical line, expressed as UTF-16 offsets. */
+export interface WrapRange {
+  /**
+   * Character offsets into the logical line, not visual columns.
+   *
+   * Pixel wrapping can break between any two grapheme clusters, so keeping the
+   * exact string offsets avoids converting a measured boundary back through a
+   * second width model.
+   */
+  start: number;
+  end: number;
+  continued: boolean;
+}
+
+/** Measured advances of the two glyph classes used by the code font. */
+export interface WrapMetrics {
+  /** Advance width of an ordinary Latin/code glyph, in CSS pixels. */
+  charWidth: number;
+  /** Advance width of a CJK or emoji grapheme, in CSS pixels. */
+  wideCharWidth: number;
+  /** Monospace tab stops. Keep in sync with CSS `tab-size`. */
+  tabSize?: number;
+}
+
 /** One entry in the flattened display list. */
 export interface DisplayItem {
   /** Index into `DiffResult.rows`. */
@@ -31,10 +55,20 @@ export interface DisplayItem {
    * Character range within the row, when the line is wrapped.
    *
    * Absent means "the whole line", which is the unwrapped case and stays the
-   * default so nothing changes when wrapping is off. When present, this item is one
-   * physical line of a longer logical row, and the renderer shows only this slice.
+   * default so nothing changes when wrapping is off.
    */
-  wrap?: { start: number; end: number; continued: boolean };
+  wrap?: WrapRange;
+  /**
+   * Side-specific wrap ranges for the split view.
+   *
+   * The two panes can have different widths, so each side gets its own physical
+   * slices. The item list remains shared and row-aligned by filling the shorter
+   * side with `null` continuation ranges.
+   */
+  splitWrap?: {
+    left: WrapRange | null;
+    right: WrapRange | null;
+  };
   /**
    * Set on the first row of an *expanded* unchanged run, so the pane can draw a
    * bar that collapses it again. Without this an expanded run is a one-way door.
@@ -128,51 +162,154 @@ export function buildDisplay(
   return items;
 }
 
+const DEFAULT_TAB_SIZE = 8;
+
+const graphemeSegmenter =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+function* graphemes(text: string): Generator<{ segment: string; index: number }> {
+  if (graphemeSegmenter) {
+    for (const part of graphemeSegmenter.segment(text)) {
+      yield { segment: part.segment, index: part.index };
+    }
+    return;
+  }
+
+  let index = 0;
+  for (const segment of Array.from(text)) {
+    yield { segment, index };
+    index += segment.length;
+  }
+}
+
 /**
- * Expand display items into wrapped physical lines.
+ * Advance of one grapheme at the current monospace column.
  *
- * Runs *after* folding, not instead of it: a fold bar stays a single item, and only
- * real rows are sliced. Splitting before folding would change what a "row" means to
- * the fold logic and to hunk navigation.
- *
- * `lineLength(row)` returns the character length of a row's text on the side being
- * displayed. It is a callback because the two panes have different text for the
- * same aligned row, and each must wrap according to its own content — a `modify`
- * row is often one line on the left and two on the right.
- *
- * Items that fit are returned untouched, so the common case costs one length check
- * per visible row and produces no extra objects.
+ * Width is measured per grapheme rather than per UTF-16 code unit so emoji ZWJ
+ * sequences and combining marks are not split at a wrap boundary.
  */
-export function expandWrapped(
+function graphemeAdvance(
+  segment: string,
+  column: number,
+  metrics: WrapMetrics,
+): { pixels: number; columns: number } {
+  const tabSize = Math.max(1, Math.floor(metrics.tabSize ?? DEFAULT_TAB_SIZE));
+  if (segment === "\t") {
+    const columns = tabSize - (column % tabSize);
+    return { pixels: columns * metrics.charWidth, columns };
+  }
+
+  let wide = false;
+  for (const char of segment) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\u200d" || isWideCodePoint(code)) {
+      wide = true;
+      break;
+    }
+  }
+
+  if (wide) return { pixels: metrics.wideCharWidth, columns: 2 };
+  if ([...segment].every((char) => ZERO_WIDTH.test(char))) {
+    return { pixels: 0, columns: 0 };
+  }
+  return { pixels: metrics.charWidth, columns: 1 };
+}
+
+/** Rendered width of a string under the supplied code-font metrics. */
+export function visualWidth(text: string, metrics: WrapMetrics): number {
+  let width = 0;
+  let column = 0;
+  for (const { segment } of graphemes(text)) {
+    const advance = graphemeAdvance(segment, column, metrics);
+    width += advance.pixels;
+    column += advance.columns;
+  }
+  return width;
+}
+
+/**
+ * Split a line at the last grapheme that fits inside `maxWidth` CSS pixels.
+ *
+ * The previous wrapper converted text to monospace *columns*, assuming every CJK
+ * glyph was exactly twice the bundled Latin font's advance. macOS renders CJK from
+ * a fallback font whose glyphs are narrower than that. Long mixed-language lines
+ * therefore stopped at different points depending on their ASCII/CJK mix, leaving
+ * conspicuous empty space at the right edge. Returning UTF-16 offsets lets the
+ * renderer slice exactly at the boundary chosen by the measured pixel widths.
+ */
+export function wrapTextByWidth(
+  text: string,
+  maxWidth: number,
+  metrics: WrapMetrics,
+): WrapRange[] {
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0 || text.length === 0) {
+    return [{ start: 0, end: text.length, continued: false }];
+  }
+
+  const out: WrapRange[] = [];
+  let start = 0;
+  let width = 0;
+  let column = 0;
+
+  for (const part of graphemes(text)) {
+    const advance = graphemeAdvance(part.segment, column, metrics);
+    if (width > 0 && width + advance.pixels > maxWidth) {
+      out.push({ start, end: part.index, continued: start > 0 });
+      start = part.index;
+      width = 0;
+      column = 0;
+    }
+    width += advance.pixels;
+    column += advance.columns;
+  }
+
+  out.push({ start, end: text.length, continued: start > 0 });
+  return out;
+}
+
+/**
+ * Expand a split-view row using a different wrap width for each pane.
+ *
+ * The panes must still share one display-item list so vertical scrolling stays
+ * synchronised. We therefore emit the longer side's number of rows and use `null`
+ * ranges to blank the shorter side once its text has ended.
+ */
+export function expandSplitWrapped(
   items: DisplayItem[],
-  columns: number,
-  lineLength: (row: number) => number,
+  leftMaxWidth: number,
+  rightMaxWidth: number,
+  leftText: (row: number) => string,
+  rightText: (row: number) => string,
+  metrics: WrapMetrics,
 ): DisplayItem[] {
-  const width = Math.max(1, Math.floor(columns));
-  if (width < MIN_WRAP_COLUMNS) return items;
+  const minimumWidth = MIN_WRAP_COLUMNS * metrics.charWidth;
+  if (leftMaxWidth < minimumWidth || rightMaxWidth < minimumWidth) return items;
 
   const out: DisplayItem[] = [];
   for (const item of items) {
-    // Fold bars and placeholders carry no text to wrap.
     if (item.fold) {
       out.push(item);
       continue;
     }
 
-    const len = lineLength(item.row);
-    if (len <= width) {
+    const left = wrapTextByWidth(leftText(item.row), leftMaxWidth, metrics);
+    const right = wrapTextByWidth(rightText(item.row), rightMaxWidth, metrics);
+    const count = Math.max(left.length, right.length);
+    if (count <= 1) {
       out.push(item);
       continue;
     }
 
-    for (let start = 0; start < len; start += width) {
+    for (let i = 0; i < count; i++) {
       out.push({
         row: item.row,
         fold: null,
-        wrap: {
-          start,
-          end: Math.min(len, start + width),
-          continued: start > 0,
+        collapsedBar: i === 0 ? item.collapsedBar ?? null : null,
+        splitWrap: {
+          left: left[i] ?? null,
+          right: right[i] ?? null,
         },
       });
     }
@@ -449,6 +586,8 @@ export type UnifiedItem =
       side: "left" | "right";
       /** 1-based render key suffix, disambiguating the two halves of a modify. */
       half: 0 | 1;
+      /** Present when this is one physical slice of a wrapped line. */
+      wrap?: WrapRange;
     }
   | {
       /** A collapsed run, drawn as a bar the user can click. */
@@ -456,6 +595,7 @@ export type UnifiedItem =
       sourceRow: number;
       side: "left" | "right";
       half: 0 | 1;
+      wrap?: WrapRange;
     };
 
 /**
@@ -518,6 +658,44 @@ export function buildUnifiedDisplay(
   }
 
   return items;
+}
+
+/**
+ * Expand unified-view lines by measured pixel width.
+ *
+ * The unified view has one text side per item instead of a left/right pair, so it
+ * can use the same measured slices as the split view without the two-side alignment
+ * callback. Fold bars stay unchanged.
+ */
+export function expandUnifiedWrapped(
+  items: UnifiedItem[],
+  maxWidth: number,
+  textFor: (item: UnifiedItem) => string,
+  metrics: WrapMetrics,
+): UnifiedItem[] {
+  if (maxWidth < MIN_WRAP_COLUMNS * metrics.charWidth) return items;
+
+  const out: UnifiedItem[] = [];
+  for (const item of items) {
+    if (item.fold !== null) {
+      out.push(item);
+      continue;
+    }
+
+    const ranges = wrapTextByWidth(textFor(item), maxWidth, metrics);
+    if (ranges.length <= 1) {
+      out.push(item);
+      continue;
+    }
+
+    for (const range of ranges) {
+      out.push({
+        ...item,
+        wrap: range,
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -669,15 +847,6 @@ export function nextChangeHunk(
   return candidate;
 }
 
-/** One physical line produced by wrapping a logical line. */
-export interface WrappedLine {
-  /** Char range within the logical line, half-open. */
-  start: number;
-  end: number;
-  /** True on every segment after the first: drawn as a continuation. */
-  continued: boolean;
-}
-
 /**
  * Split one logical line into fixed-width segments.
  *
@@ -691,24 +860,116 @@ export interface WrappedLine {
  * Segmenting produces N lines of the known height instead, so rendering, folding,
  * and the synchronised scroll all keep working unchanged.
  *
- * Splitting is by character count, which is exact because the font is monospaced.
- * Tabs are counted as one column here; the renderer expands them consistently with
- * `tab-size`, so a tab never straddles a boundary invisibly.
+ * Splitting is by display columns rather than string indices: CJK glyphs and
+ * emoji occupy two monospace cells, while tabs advance to the next tab stop.
+ * Counting JavaScript code units made a line of Chinese look half as wide as it
+ * rendered, so wrapping either did not start or still overflowed after it did.
  */
-export function wrapLine(text: string, columns: number): WrappedLine[] {
+export function wrapLine(text: string, columns: number): WrapRange[] {
   const width = Math.max(1, Math.floor(columns));
-  const len = text.length;
-  if (len <= width) return [{ start: 0, end: len, continued: false }];
+  const total = displayWidth(text);
+  if (total <= width) return [{ start: 0, end: text.length, continued: false }];
 
-  const out: WrappedLine[] = [];
-  for (let start = 0; start < len; start += width) {
-    out.push({
-      start,
-      end: Math.min(len, start + width),
-      continued: start > 0,
-    });
+  const out: WrapRange[] = [];
+  for (let start = 0; start < total; start += width) {
+    const end = Math.min(total, start + width);
+    const slice = sliceAtColumns(text, start, end);
+    if (slice.end > slice.start) {
+      out.push({ start: slice.start, end: slice.end, continued: start > 0 });
+    }
   }
   return out;
+}
+
+/**
+ * Tab width used by both the wrapper and the rendered code.
+ *
+ * Keep this in sync with `tab-size` in `CodeLine.svelte`. If the two disagree,
+ * wrapping either leaves indentation hanging past the pane edge or breaks the
+ * line before the visible text needs it.
+ */
+export const TAB_COLUMNS = 8;
+
+/** True for code points rendered two monospace cells wide. */
+function isWideCodePoint(code: number): boolean {
+  return (
+    code >= 0x1100 &&
+    (code <= 0x115f ||
+      code === 0x2329 ||
+      code === 0x232a ||
+      (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1faff) ||
+      (code >= 0x20000 && code <= 0x3fffd))
+  );
+}
+
+/** Combining marks and format controls add no advance of their own. */
+const ZERO_WIDTH = /^[\p{Mark}\p{Cf}]$/u;
+
+function codePointColumns(char: string, column: number): number {
+  if (char === "\t") return TAB_COLUMNS - (column % TAB_COLUMNS);
+  if (ZERO_WIDTH.test(char)) return 0;
+  return isWideCodePoint(char.codePointAt(0) ?? 0) ? 2 : 1;
+}
+
+/**
+ * Visual width of one logical line, in monospace columns.
+ *
+ * A tab is measured from the current column, exactly as CSS renders it, so two
+ * otherwise equal lines with different indentation still wrap at the same point.
+ */
+export function displayWidth(text: string, tabSize = TAB_COLUMNS): number {
+  let column = 0;
+  for (const char of text) {
+    if (char === "\t") column += tabSize - (column % tabSize);
+    else if (!ZERO_WIDTH.test(char)) {
+      column += isWideCodePoint(char.codePointAt(0) ?? 0) ? 2 : 1;
+    }
+  }
+  return column;
+}
+
+/**
+ * Slice a line by display columns.
+ *
+ * Returned offsets are UTF-16 indices for `String.slice`, because tokens and
+ * inline segments use the same coordinate system. A wide glyph never straddles a
+ * boundary: it belongs to the first slice in which it starts.
+ */
+export function sliceAtColumns(
+  text: string,
+  startColumn: number,
+  endColumn: number,
+  tabSize = TAB_COLUMNS,
+): { start: number; end: number; text: string } {
+  const start = Math.max(0, startColumn);
+  const end = Math.max(start, endColumn);
+  let column = 0;
+  let index = 0;
+  let from = -1;
+  let to = -1;
+
+  while (index < text.length) {
+    if (from === -1 && column >= start) from = index;
+    if (column >= end) break;
+
+    const codePoint = text.codePointAt(index) ?? 0;
+    const units = codePoint > 0xffff ? 2 : 1;
+    const char = text.slice(index, index + units);
+    to = index + units;
+    column += char === "\t" ? tabSize - (column % tabSize) : codePointColumns(char, column);
+    index += units;
+  }
+
+  if (from === -1) from = text.length;
+  if (to === -1 || to < from) to = from;
+  return { start: from, end: to, text: text.slice(from, to) };
 }
 
 /**

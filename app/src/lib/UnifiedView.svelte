@@ -15,8 +15,13 @@
   import CodeLine from "./CodeLine.svelte";
   import type { AlignedRow, InlineSegment, RowKind } from "../lib/types";
   import type { UnifiedItem } from "../lib/viewport";
-  import type { TokenSource } from "../lib/syntax";
+  import type { Token, TokenSource } from "../lib/syntax";
   import { t } from "../lib/i18nStore";
+  import {
+    searchSlicesFor,
+    type SearchSlice,
+    type SearchViewState,
+  } from "../lib/search";
 
   /** One physical line in the unified layout. */
   interface UnifiedLine {
@@ -27,6 +32,9 @@
     side: "left" | "right";
     text: string;
     segments: InlineSegment[];
+    tokens: Token[];
+    continued: boolean;
+    searchSlices: SearchSlice[];
     /** Source row this line came from, so navigation can map back. */
     sourceRow: number;
   }
@@ -53,6 +61,10 @@
     onScroll: (offset: { top: number; left: number }) => void;
     /** Authoritative vertical offset to mirror. */
     scrollOffset: number;
+    /** Wrapping is a strict no-horizontal-scroll mode. */
+    wrapped: boolean;
+    /** Query hits for this comparison, or null while search is closed. */
+    search: SearchViewState | null;
     /** Expand a collapsed run, by hunk index. */
     onExpandFold: (hunkIndex: number) => void;
     /** Lazy syntax tokens, one source per side. */
@@ -75,6 +87,8 @@
     leftTokens,
     rightTokens,
     scrollOffset,
+    wrapped,
+    search,
   }: Props = $props();
 
   /**
@@ -91,8 +105,30 @@
     const isModify = row.kind === "modify";
     const side = item.side;
     const lineNumber = side === "left" ? row.left : row.right;
-    const text =
+    const fullText =
       lineNumber === null ? "" : (side === "left" ? leftLines : rightLines)[lineNumber] ?? "";
+    const range = item.wrap
+      ? {
+          start: item.wrap.start,
+          end: item.wrap.end,
+          text: fullText.slice(item.wrap.start, item.wrap.end),
+        }
+      : { start: 0, end: fullText.length, text: fullText };
+    const segments = side === "left" ? row.left_inline : row.right_inline;
+    const tokens =
+      lineNumber === null
+        ? []
+        : ((side === "left" ? leftTokens?.get(lineNumber) : rightTokens?.get(lineNumber)) ?? []);
+    const searchSlices =
+      search === null
+        ? []
+        : searchSlicesFor(
+            search.hitsByRow.get(item.sourceRow) ?? [],
+            side,
+            range.start,
+            range.end,
+            search.active,
+          );
 
     // A modify row draws as a deletion above an insertion; everything else keeps its
     // own kind. This is the canonical unified rendering.
@@ -103,10 +139,67 @@
       kind,
       lineNumber,
       side,
-      text,
-      segments: side === "left" ? row.left_inline : row.right_inline,
+      text: range.text,
+      segments: sliceSegments(item, segments, range),
+      tokens: sliceTokens(item, tokens, range),
+      continued: item.wrap?.continued ?? false,
+      searchSlices,
       sourceRow: item.sourceRow,
     };
+  }
+
+  /** Wrapped lines must show only their own slice of the inline highlights. */
+  function sliceSegments(
+    item: UnifiedItem,
+    segments: InlineSegment[],
+    range: { start: number; end: number },
+  ): InlineSegment[] {
+    if (!item.wrap || segments.length === 0) return segments;
+
+    const out: InlineSegment[] = [];
+    let offset = 0;
+    for (const segment of segments) {
+      const segmentStart = offset;
+      const segmentEnd = offset + segment.text.length;
+      offset = segmentEnd;
+      if (segmentEnd <= range.start) continue;
+      if (segmentStart >= range.end) break;
+
+      const from = Math.max(0, range.start - segmentStart);
+      const to = Math.min(segment.text.length, range.end - segmentStart);
+      if (to > from) {
+        out.push({
+          ...segment,
+          text: segment.text.slice(from, to),
+          char_start: Math.max(segment.char_start, range.start),
+          char_end: Math.min(segment.char_end, range.end),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Token spans use UTF-16 offsets, so they follow the same character range. */
+  function sliceTokens(
+    item: UnifiedItem,
+    tokens: Token[],
+    range: { start: number; end: number },
+  ): Token[] {
+    if (!item.wrap || tokens.length === 0) return tokens;
+
+    const out: Token[] = [];
+    let offset = 0;
+    for (const token of tokens) {
+      const tokenStart = offset;
+      const tokenEnd = offset + token.text.length;
+      offset = tokenEnd;
+      if (tokenEnd <= range.start) continue;
+      if (tokenStart >= range.end) break;
+      const from = Math.max(0, range.start - tokenStart);
+      const to = Math.min(token.text.length, range.end - tokenStart);
+      if (to > from) out.push({ kind: token.kind, text: token.text.slice(from, to) });
+    }
+    return out;
   }
 
   const visible = $derived(items.slice(start, end));
@@ -115,15 +208,19 @@
 
   function handleScroll(): void {
     if (scroller) {
-      onScroll({ top: scroller.scrollTop, left: scroller.scrollLeft });
+      if (wrapped && scroller.scrollLeft !== 0) scroller.scrollLeft = 0;
+      onScroll({ top: scroller.scrollTop, left: wrapped ? 0 : scroller.scrollLeft });
     }
   }
 
   /** Mirror the parent's authoritative offset into this scroller. */
-  function mirror(scrollTop: number): void {
+  function mirror(scrollTop: number, noHorizontalScroll: boolean): void {
     if (!scroller) return;
     if (Math.abs(scroller.scrollTop - scrollTop) > 0.5) {
       scroller.scrollTop = scrollTop;
+    }
+    if (noHorizontalScroll && scroller.scrollLeft !== 0) {
+      scroller.scrollLeft = 0;
     }
   }
 
@@ -133,14 +230,20 @@
 
   // Follow the parent's offset, exactly like the split panes do.
   $effect(() => {
-    mirror(scrollOffset);
+    mirror(scrollOffset, wrapped);
   });
 </script>
 
-<div class="unified" bind:this={scroller} onscroll={handleScroll} role="presentation">
+<div
+  class="unified"
+  class:wrapped
+  bind:this={scroller}
+  onscroll={handleScroll}
+  role="presentation"
+>
   <div class="spacer" style:height="{totalHeight}px">
     <div class="window" style:transform="translateY({offsetY}px)">
-      {#each visible as item (item.fold ? `f${item.fold.hunkIndex}` : `${item.side}${item.sourceRow}`)}
+      {#each visible as item (item.fold ? `f${item.fold.hunkIndex}` : `${item.side}${item.sourceRow}:${item.wrap?.start ?? 0}`)}
         {#if item.fold}
           <!--
             The collapsed run, drawn exactly like the split view's bar so the two
@@ -182,8 +285,11 @@
               segments={u.segments}
               text={u.text}
               side={u.side}
+              continued={u.continued}
+              {wrapped}
+              searchSlices={u.searchSlices}
               active={isActive(u.sourceRow)}
-              tokens={u.side === "left" ? (leftTokens?.get(u.lineNumber) ?? []) : (rightTokens?.get(u.lineNumber) ?? [])}
+              tokens={u.tokens}
             />
           {/if}
         {/if}
@@ -254,6 +360,11 @@
     contain: layout paint;
   }
 
+  .unified.wrapped {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
 
   .spacer {
     position: relative;
@@ -269,5 +380,11 @@
     width: max-content;
     min-width: 100%;
     will-change: transform;
+  }
+
+  .unified.wrapped .window {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 </style>

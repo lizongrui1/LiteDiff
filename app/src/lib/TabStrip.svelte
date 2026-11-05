@@ -24,6 +24,7 @@
   import type { Tab } from "../lib/tabs";
   import { hasContent, numberLabels, tabLabel } from "../lib/tabs";
   import { t } from "../lib/i18nStore";
+  import { tick } from "svelte";
 
   interface Props {
     tabs: Tab[];
@@ -34,15 +35,19 @@
     untitledLabel: string;
     onActivate: (id: string) => void;
     onClose: (id: string) => void;
+    onRename: (id: string, name: string) => void;
     onNew: () => void;
     /** Reorder by dragging; `to` is the destination index. */
     onMove: (from: number, to: number) => void;
   }
 
-  let { tabs, activeId, pastedLabel, untitledLabel, onActivate, onClose, onNew, onMove }:
+  let { tabs, activeId, pastedLabel, untitledLabel, onActivate, onClose, onRename, onNew, onMove }:
     Props = $props();
 
   let dragging = $state<number | null>(null);
+  let editingId = $state<string | null>(null);
+  let draftName = $state("");
+  let renameInput = $state<HTMLInputElement | null>(null);
 
   /*
    * Labels, disambiguated.
@@ -55,14 +60,18 @@
   const labels = $derived(
     numberLabels(
       tabs,
-      (tab) => tabLabel(tab.session, pastedLabel, untitledLabel),
+      (tab) => tabLabel(tab.session, pastedLabel, untitledLabel, tab.name),
       // A blank tab is always potentially one of several, so it is numbered from
-      // the start; a filename is not.
-      (tab) => !hasContent(tab.session),
+      // the start; a filename or explicit custom name is not.
+      (tab) => tab.name === null && !hasContent(tab.session),
     ),
   );
 
   function onDragStart(event: DragEvent, index: number): void {
+    if (editingId !== null) {
+      event.preventDefault();
+      return;
+    }
     dragging = index;
     // Firefox refuses to start a drag without payload data.
     event.dataTransfer?.setData("text/plain", String(index));
@@ -85,6 +94,36 @@
   function onDragEnd(): void {
     dragging = null;
   }
+
+  async function focusRenameInput(id: string): Promise<void> {
+    await tick();
+    // WebKit applies the click's default focus after the event handlers return.
+    // Focusing synchronously here would be undone a moment later, and the blur
+    // handler would commit before the user can type a single character.
+    requestAnimationFrame(() => {
+      if (editingId !== id || renameInput === null) return;
+      renameInput.focus();
+      renameInput.select();
+    });
+  }
+
+  function beginRename(tab: Tab): void {
+    draftName = tab.name ?? tabLabel(tab.session, pastedLabel, untitledLabel);
+    editingId = tab.id;
+    void focusRenameInput(tab.id);
+  }
+
+  function commitRename(id: string): void {
+    if (editingId !== id) return;
+    const name = draftName;
+    editingId = null;
+    onRename(id, name);
+  }
+
+  function cancelRename(): void {
+    editingId = null;
+    draftName = "";
+  }
 </script>
 
 <div class="tabstrip" role="tablist" aria-label={$t("tabs.label")}>
@@ -94,16 +133,23 @@
       class="tab"
       class:active={tab.id === activeId}
       class:dragging={dragging === index}
+      class:editing={editingId === tab.id}
       role="tab"
       aria-selected={tab.id === activeId}
       tabindex={tab.id === activeId ? 0 : -1}
-      title={label}
-      draggable="true"
+      title={editingId === tab.id ? undefined : `${label} · ${$t("tabs.renameHint")}`}
+      draggable={editingId !== tab.id}
       ondragstart={(e) => onDragStart(e, index)}
       ondragover={(e) => onDragOver(e, index)}
       ondrop={(e) => onDrop(e, index)}
       ondragend={onDragEnd}
       onclick={() => onActivate(tab.id)}
+      ondblclick={(e) => {
+        if (editingId !== null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        beginRename(tab);
+      }}
       onauxclick={(e) => {
         if (e.button === 1) {
           e.preventDefault();
@@ -111,6 +157,13 @@
         }
       }}
       onkeydown={(e) => {
+        if (editingId === tab.id) return;
+        if (e.key === "F2") {
+          e.preventDefault();
+          e.stopPropagation();
+          beginRename(tab);
+          return;
+        }
         // Enter/Space activate, matching every other focusable control.
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -118,12 +171,38 @@
         }
       }}
     >
-      <span class="label">{label}</span>
+      {#if editingId === tab.id}
+        <input
+          class="rename-input"
+          type="text"
+          bind:this={renameInput}
+          bind:value={draftName}
+          aria-label={$t("tabs.rename")}
+          onblur={() => commitRename(tab.id)}
+          onclick={(e) => e.stopPropagation()}
+          ondblclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => {
+            // Keep application shortcuts out of the rename field.
+            e.stopPropagation();
+            if (e.isComposing) return;
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitRename(tab.id);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancelRename();
+            }
+          }}
+        />
+      {:else}
+        <span class="label">{label}</span>
+      {/if}
       <button
         type="button"
         class="close"
         title={$t("tabs.close")}
         aria-label={$t("tabs.close")}
+        ondblclick={(e) => e.stopPropagation()}
         onclick={(e) => {
           // Without this the tab's own click handler would also fire and activate
           // the tab being closed.
@@ -222,6 +301,11 @@
     opacity: 0.45;
   }
 
+  .tab.editing {
+    min-width: 148px;
+    cursor: text;
+  }
+
   .tab:focus-visible {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--c-accent);
@@ -232,6 +316,22 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .rename-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    height: 20px;
+    padding: 0 4px;
+    border: 1px solid var(--c-accent);
+    border-radius: 3px;
+    outline: none;
+    background: var(--c-bg);
+    color: var(--c-text);
+    font: inherit;
+    user-select: text;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 18%, transparent);
   }
 
   /*
@@ -260,6 +360,11 @@
   .tab:hover .close,
   .tab.active .close {
     opacity: 1;
+  }
+
+  .tab.editing .close {
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .close:hover {

@@ -1,6 +1,6 @@
 [package]
 name = "litediff-core"
-description = "Pure-Rust diff engine for LiteDiff: line alignment, Myers/Patience line diff, token-level intra-line diff."
+description = "Pure-Rust diff engine for LiteDiff: Myers line diff and token-level intra-line diff."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -62,10 +62,7 @@ export interface DiffResult {
   stats: DiffStats;
 }
 
-export type LineAlgorithm = "myers" | "patience";
-
 export interface DiffOptions {
-  algorithm: LineAlgorithm;
   ignore_whitespace: boolean;
   ignore_all_whitespace: boolean;
   ignore_case: boolean;
@@ -167,7 +164,6 @@ export interface Session {
 
 /** Partial options sent from the UI. */
 export interface OptionsPatch {
-  algorithm?: LineAlgorithm;
   ignoreWhitespace?: boolean;
   ignoreAllWhitespace?: boolean;
   ignoreCase?: boolean;

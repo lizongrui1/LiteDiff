@@ -9,31 +9,16 @@
 //! ```text
 //! SourceText (bytes -> lines)
 //!   -> intern::line_keys        (lines -> comparable u32 ids, honouring DiffOptions)
-//!   -> myers / patience         (ids -> ordered match pairs)
+//!   -> myers                    (ids -> ordered match pairs)
 //!   -> model::ops_from_matches  (match pairs -> LineOp edit script)
 //!   -> align::build             (edit script -> padded side-by-side rows + hunks)
 //!   -> token::intra_line        (modify rows -> char-level highlight segments)
 //! ```
 
-/// Line-level algorithm selection.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum LineAlgorithm {
-    /// Myers O(ND) with linear-space bisection. Minimal edit script.
-    #[default]
-    Myers,
-    /// Patience diff: anchors on lines that are unique in both sides, then
-    /// recurses. Produces more human-readable hunks on large refactors.
-    Patience,
-}
-
 /// Knobs that affect *what counts as equal*, not how it is rendered.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffOptions {
-    /// Algorithm used for the line-level pass.
-    pub algorithm: LineAlgorithm,
     /// Compare lines after trimming leading/trailing whitespace.
     pub ignore_whitespace: bool,
     /// Compare lines after removing every whitespace character, so that
@@ -52,7 +37,6 @@ pub struct DiffOptions {
 impl Default for DiffOptions {
     fn default() -> Self {
         Self {
-            algorithm: LineAlgorithm::default(),
             ignore_whitespace: false,
             ignore_all_whitespace: false,
             ignore_case: false,

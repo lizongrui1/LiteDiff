@@ -26,6 +26,14 @@ import {
   nearestChange,
   anchorIndexForScroll,
   windowFor,
+  displayWidth,
+  visualWidth,
+  wrapTextByWidth,
+  expandSplitWrapped,
+  expandUnifiedWrapped,
+  sliceAtColumns,
+  wrapLine,
+  type UnifiedItem,
 } from "../src/lib/viewport.ts";
 
 /** Minimal hunk factory so each test states only what it cares about. */
@@ -803,4 +811,158 @@ test("a row inside a collapsed run maps to the bar's index", () => {
   assert.equal(unifiedIndexIn(items, 50), 1);
   // Row 0 is the visible context row above the bar.
   assert.equal(unifiedIndexIn(items, 0), 0);
+});
+
+// --- wrapping by measured pixel width ---------------------------------------
+//
+// The original wrapper converted text to monospace columns and assumed a CJK glyph
+// always occupied two Latin cells. On macOS CJK comes from a fallback font with a
+// different advance, so mixed-language lines ended at visibly inconsistent points.
+
+test("display width counts CJK, emoji and tabs as they are rendered", () => {
+  assert.equal(displayWidth("abcd"), 4);
+  assert.equal(displayWidth("中文"), 4);
+  assert.equal(displayWidth("a中"), 3);
+  assert.equal(displayWidth("😀"), 2);
+  assert.equal(displayWidth("\tx"), 9, "a tab advances to the next eight-column stop");
+  assert.equal(displayWidth("a\tb"), 9, "tab width depends on the current column");
+});
+
+test("wrapLine slices by display columns without splitting a wide glyph", () => {
+  const lines = wrapLine("中文中文", 4);
+  assert.deepEqual(lines, [
+    { start: 0, end: 2, continued: false },
+    { start: 2, end: 4, continued: true },
+  ]);
+});
+
+test("sliceAtColumns maps visual columns back to string offsets", () => {
+  const text = "中文abc";
+  assert.deepEqual(sliceAtColumns(text, 0, 2), { start: 0, end: 1, text: "中" });
+  assert.deepEqual(sliceAtColumns(text, 2, 4), { start: 1, end: 2, text: "文" });
+  assert.deepEqual(sliceAtColumns(text, 4, 7), { start: 2, end: 5, text: "abc" });
+});
+
+test("visual width uses the measured fallback-font advance for CJK", () => {
+  const metrics = { charWidth: 7.2, wideCharWidth: 12 };
+  assert.equal(visualWidth("abcd", metrics), 28.8);
+  assert.equal(visualWidth("中文", metrics), 24);
+  assert.equal(visualWidth("a中", metrics), 19.2);
+  assert.equal(visualWidth("a\tb", metrics), 64.8);
+});
+
+test("pixel wrapping fills each slice using the measured CJK advance", () => {
+  const metrics = { charWidth: 10, wideCharWidth: 12 };
+  const wrapped = wrapTextByWidth("中".repeat(30), 125, metrics);
+  assert.deepEqual(wrapped, [
+    { start: 0, end: 10, continued: false },
+    { start: 10, end: 20, continued: true },
+    { start: 20, end: 30, continued: true },
+  ]);
+});
+
+test("a long mixed-width line wraps by pixels instead of character count", () => {
+  const items = [
+    {
+      row: 0,
+      fold: null,
+      collapsedBar: { hunkIndex: 2, rowCount: 20 },
+    },
+  ];
+  const metrics = { charWidth: 10, wideCharWidth: 12 };
+  const text = "中".repeat(50);
+  const wrapped = expandSplitWrapped(
+    items,
+    250,
+    300,
+    () => text,
+    () => "",
+    metrics,
+  );
+  assert.equal(wrapped.length, 3);
+  assert.deepEqual(
+    wrapped.map((item) => item.splitWrap?.left),
+    [
+      { start: 0, end: 20, continued: false },
+      { start: 20, end: 40, continued: true },
+      { start: 40, end: 50, continued: true },
+    ],
+  );
+  assert.deepEqual(wrapped[0].collapsedBar, { hunkIndex: 2, rowCount: 20 });
+  assert.equal(wrapped[1].collapsedBar, null, "the collapse chip renders once, not per slice");
+});
+
+test("split wrapping uses each pane's own width while keeping rows aligned", () => {
+  const items = [{ row: 0, fold: null, collapsedBar: { hunkIndex: 2, rowCount: 20 } }];
+  const metrics = { charWidth: 1, wideCharWidth: 1.2 };
+  const wrapped = expandSplitWrapped(
+    items,
+    100,
+    100,
+    () => "a".repeat(150),
+    () => "b".repeat(250),
+    metrics,
+  );
+
+  assert.equal(wrapped.length, 3, "the wider side controls the physical row count");
+  assert.deepEqual(
+    wrapped.map((item) => item.splitWrap),
+    [
+      {
+        left: { start: 0, end: 100, continued: false },
+        right: { start: 0, end: 100, continued: false },
+      },
+      {
+        left: { start: 100, end: 150, continued: true },
+        right: { start: 100, end: 200, continued: true },
+      },
+      {
+        left: null,
+        right: { start: 200, end: 250, continued: true },
+      },
+    ],
+  );
+  assert.deepEqual(wrapped[0].collapsedBar, { hunkIndex: 2, rowCount: 20 });
+  assert.equal(wrapped[1].collapsedBar, null);
+});
+
+test("a split row that fits either pane stays a single unwrapped item", () => {
+  const items = [{ row: 0, fold: null }];
+  const wrapped = expandSplitWrapped(
+    items,
+    100,
+    100,
+    () => "12345",
+    () => "12345678",
+    { charWidth: 1, wideCharWidth: 1.2 },
+  );
+  assert.deepEqual(wrapped, items);
+});
+
+test("the unified view wraps wide lines into aligned physical rows", () => {
+  const items: UnifiedItem[] = [
+    { fold: null, sourceRow: 0, side: "left", half: 0 },
+    {
+      fold: { count: 5, startRow: 1, hunkIndex: 0 },
+      sourceRow: 1,
+      side: "left",
+      half: 0,
+    },
+  ];
+  const wrapped = expandUnifiedWrapped(
+    items,
+    100,
+    (item) => (item.fold ? "" : "a".repeat(250)),
+    { charWidth: 1, wideCharWidth: 1.2 },
+  );
+  assert.equal(wrapped.length, 4, "three slices plus the unchanged fold bar");
+  assert.deepEqual(
+    wrapped.slice(0, 3).map((item) => item.wrap),
+    [
+      { start: 0, end: 100, continued: false },
+      { start: 100, end: 200, continued: true },
+      { start: 200, end: 250, continued: true },
+    ],
+  );
+  assert.equal(wrapped[3].fold?.hunkIndex, 0);
 });

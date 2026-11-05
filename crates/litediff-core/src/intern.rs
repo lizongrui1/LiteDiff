@@ -88,7 +88,11 @@ impl Interner {
 }
 
 /// Build the symbol sequences for both sides.
-pub fn intern(left: &SourceText, right: &SourceText, options: &DiffOptions) -> (LineKeys, LineKeys) {
+pub fn intern(
+    left: &SourceText,
+    right: &SourceText,
+    options: &DiffOptions,
+) -> (LineKeys, LineKeys) {
     let cap = (left.line_count() + right.line_count()) as usize;
     let mut interner = Interner::with_capacity(cap);
 
@@ -160,7 +164,11 @@ mod tests {
     #[test]
     fn distinct_counts_alphabet() {
         let opts = DiffOptions::default();
-        let (l, r) = intern(&SourceText::new("a\nb\n"), &SourceText::new("b\nc\n"), &opts);
+        let (l, r) = intern(
+            &SourceText::new("a\nb\n"),
+            &SourceText::new("b\nc\n"),
+            &opts,
+        );
         assert_eq!(l.distinct, 3);
         assert_eq!(r.distinct, 3);
     }

@@ -49,7 +49,6 @@ export interface HistoryEntry {
   left: { label: string; path: string | null; text: string };
   right: { label: string; path: string | null; text: string };
   options: {
-    algorithm?: string;
     ignoreWhitespace: boolean;
     ignoreAllWhitespace: boolean;
     ignoreCase: boolean;
@@ -159,7 +158,6 @@ export function entryFromSession(
     left: { label: session.left.label, path: session.left.path, text: session.left.text },
     right: { label: session.right.label, path: session.right.path, text: session.right.text },
     options: {
-      algorithm: session.options.algorithm,
       ignoreWhitespace: session.options.ignore_whitespace,
       ignoreAllWhitespace: session.options.ignore_all_whitespace,
       ignoreCase: session.options.ignore_case,
@@ -172,8 +170,8 @@ export function entryFromSession(
  * Convert a stored entry back into the session shape the UI diffs.
  *
  * The result is deliberately empty: it is recomputed by the backend from the two
- * texts, because a stored result would go stale as soon as an algorithm default or
- * an ignore option changed. The frontend renders whatever the fresh diff returns.
+ * texts, because a stored result would go stale as soon as an ignore option
+ * changed. The frontend renders whatever the fresh diff returns.
  */
 export function sessionFromEntry(entry: HistoryEntry): Session {
   return {
@@ -192,7 +190,6 @@ export function sessionFromEntry(entry: HistoryEntry): Session {
       stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
     },
     options: {
-      algorithm: entry.options.algorithm === "patience" ? "patience" : "myers",
       ignore_whitespace: entry.options.ignoreWhitespace,
       ignore_all_whitespace: entry.options.ignoreAllWhitespace,
       ignore_case: entry.options.ignoreCase,

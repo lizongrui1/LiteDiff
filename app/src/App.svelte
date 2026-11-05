@@ -33,8 +33,9 @@
     unifiedFoldHidingRow,
     unifiedIndexIn,
     buildUnifiedDisplay,
+    expandUnifiedWrapped,
+    expandSplitWrapped,
     windowFor,
-    expandWrapped,
     nearestChange,
   } from "./lib/viewport";
   import type { DisplayItem } from "./lib/viewport";
@@ -62,8 +63,23 @@
   import { createTokenSource, detectLanguage } from "./lib/syntax";
   import { t, resolveLocale, setLocale } from "./lib/i18nStore";
   import TabStrip from "./lib/TabStrip.svelte";
-  import { createEmptyTab, indexAfterClose, moveTab, type Tab } from "./lib/tabs";
+  import {
+    createEmptyTab,
+    indexAfterClose,
+    moveTab,
+    renameTab as renameTabIn,
+    type Tab,
+  } from "./lib/tabs";
   import HistoryPanel from "./lib/HistoryPanel.svelte";
+  import SearchBar from "./lib/SearchBar.svelte";
+  import {
+    findSearchHits,
+    groupSearchHits,
+    splitDisplayIndexForHit,
+    unifiedDisplayIndexForHit,
+    type SearchHit,
+    type SearchViewState,
+  } from "./lib/search";
   import {
     entryFromSession,
     sessionFromEntry,
@@ -141,11 +157,6 @@
    */
   let settings = $state<Settings>(loadSettings());
   let settingsOpen = $state(false);
-  /**
-   * Git history sheet.
-   *
-   * Separate from `settingsOpen`: the two are different tools that happen to both
-  let gitOpen = $state(false);
 
   /**
    * Comparison history sheet, plus the list it renders.
@@ -188,28 +199,54 @@
    * path one click away.
    */
   let editing = $state(false);
+  /** In-document find bar. Closing it keeps the query for the next ⌘F. */
+  let searchOpen = $state(false);
+  let searchQuery = $state("");
+  let searchCaseSensitive = $state(false);
+  let searchIndex = $state(0);
+  /** Prevents a slow, superseded live-search jump from overriding newer input. */
+  let searchGeneration = 0;
 
   /** Horizontal padding inside a cell: 10px left + 12px right (see `CodeLine`). */
   const CHAR_PADDING = 22;
+  /**
+   * Keep wrapped text one pixel inside the pane.
+   *
+   * CSS lays glyphs out at fractional widths even though the scroll port rounds
+   * its own dimensions. Without a tiny reserve, the widest slice can be a fraction
+   * wider than the pane and reintroduce a horizontal scrollbar.
+   */
+  const WRAP_SAFETY_PX = 1;
 
   /**
-   * Advance width of one monospace character, in px.
+   * Advance width of an ordinary Latin/code glyph, in px.
    *
    * Reactive, and measured from the rendered font rather than assumed: the bundled
    * JetBrains Mono advance differs from Menlo's, so a hard-coded value wraps a few
    * characters early or late.
    */
   let charWidth = $state(7.2);
+  /**
+   * Advance width of one CJK glyph, in px.
+   *
+   * Although a monospace Latin glyph is a reliable unit for indentation, WebKit
+   * renders Chinese/Japanese/Korean through a fallback font whose advance is not
+   * two Latin cells. Measuring it separately is what lets wrapped Chinese prose
+   * reach the right edge instead of stopping several characters early.
+   */
+  let wideCharWidth = $state(12);
 
   /**
-   * Measured width of the narrower pane, in px.
+   * Actual text-area widths for the current view, in px.
    *
-   * Kept as state and filled by the resize observer rather than read from
-   * `splitHost` inside the derived value: the host element lives inside an `{#if}`
-   * branch, so on first evaluation it is null and the width would be 0 — which
-   * silently disables wrapping the first time the button is pressed.
+   * Split panes wrap independently because they can have different widths; using
+   * the narrower pane for both left a visible gap at the end of every wrapped line
+   * in the wider pane. Unified mode has one width. These are filled after layout and
+   * updated by the ResizeObserver below.
    */
-  let paneWidth = $state(0);
+  let leftPaneWidth = $state(0);
+  let rightPaneWidth = $state(0);
+  let unifiedPaneWidth = $state(0);
 
   /**
    * Draft buffers for edit mode, kept separate from `session`.
@@ -276,7 +313,7 @@
    *
    * Declared after `hunks` because it projects them; `unifiedCount` follows from it.
    */
-  const unifiedItems = $derived(
+  const unifiedBaseItems = $derived(
     buildUnifiedDisplay(
       hunks,
       rows,
@@ -285,11 +322,36 @@
     ),
   );
 
-  const unifiedCount = $derived(unifiedItems.length);
   const stats = $derived(session?.result.stats ?? { added: 0, deleted: 0, modified: 0, unchanged: 0 });
   /** True when there is something on screen to compare, as opposed to the paste screen. */
   const hasContent = $derived(
     session !== null && (session.left.text !== "" || session.right.text !== ""),
+  );
+
+  /**
+   * All literal query hits across both documents.
+   *
+   * Search is scoped to the comparison, not just the virtual window: results in
+   * folded or off-screen rows must still be reachable from the result counter.
+   */
+  const searchHits: SearchHit[] = $derived(
+    searchOpen && searchQuery.length > 0
+      ? findSearchHits(rows, leftLines, rightLines, searchQuery, searchCaseSensitive)
+      : [],
+  );
+  const searchHitsByRow = $derived(groupSearchHits(searchHits));
+  const activeSearchHit = $derived(
+    searchHits.length === 0
+      ? null
+      : searchHits[Math.min(Math.max(0, searchIndex), searchHits.length - 1)],
+  );
+  const searchView: SearchViewState | null = $derived(
+    searchOpen
+      ? {
+          hitsByRow: searchHitsByRow,
+          active: activeSearchHit,
+        }
+      : null,
   );
 
   /** True when a real comparison produced no changes at all. */
@@ -338,36 +400,46 @@
     buildDisplay(hunks, settings.autoFold ? settings.foldThreshold : Infinity, expanded),
   );
 
-  /**
-   * Characters that fit in one wrapped line.
-   *
-   * Derived from the measured pane width rather than a fixed count, so the wrap
-   * follows the divider and the window. Gutter and cell padding are subtracted.
-   */
-  const wrapColumns = $derived.by(() => {
-    if (!settings.wrapLines) return Infinity;
-    // `paneWidth` is measured by the ResizeObserver below, not read from `splitHost`
-    // here: the host is bound inside the `{#if}` branch, so at the moment this
-    // derived value first evaluates the element does not exist yet and the width
-    // would be 0 — which silently disabled wrapping on first use.
-    if (paneWidth <= 0) return Infinity;
-    const usable = paneWidth - gutterWidth - CHAR_PADDING;
-    return Math.max(1, Math.floor(usable / Math.max(1, charWidth)));
-  });
+  /** Usable text width inside a pane of `width` px. */
+  function wrapWidthFor(width: number): number {
+    if (!settings.wrapLines || width <= 0) return Infinity;
+    return Math.max(1, width - gutterWidth - CHAR_PADDING - WRAP_SAFETY_PX);
+  }
+
+  const leftWrapWidth = $derived(wrapWidthFor(leftPaneWidth));
+  const rightWrapWidth = $derived(wrapWidthFor(rightPaneWidth));
+  const unifiedWrapWidth = $derived(wrapWidthFor(unifiedPaneWidth));
+  const wrapMetrics = $derived({ charWidth, wideCharWidth });
 
   const items: DisplayItem[] = $derived(
     settings.wrapLines
-      ? expandWrapped(baseItems, wrapColumns, (row) => {
+      ? expandSplitWrapped(baseItems, leftWrapWidth, rightWrapWidth, (row) => {
           const r = rows[row];
-          if (!r) return 0;
-          const l = r.left !== null ? (leftLines[r.left]?.length ?? 0) : 0;
-          const rt = r.right !== null ? (rightLines[r.right]?.length ?? 0) : 0;
-          // Longer side wins: both panes must yield the same item count or the
-          // synchronised scroll drifts by the difference in wrapped lines.
-          return Math.max(l, rt);
-        })
+          if (!r || r.left === null) return "";
+          return leftLines[r.left] ?? "";
+        }, (row) => {
+          const r = rows[row];
+          if (!r || r.right === null) return "";
+          return rightLines[r.right] ?? "";
+        }, wrapMetrics)
       : baseItems,
   );
+
+  const unifiedItems = $derived(
+    settings.wrapLines
+      ? expandUnifiedWrapped(unifiedBaseItems, unifiedWrapWidth, (item) => {
+          if (item.fold !== null) return "";
+          const row = rows[item.sourceRow];
+          if (!row) return "";
+          const line = item.side === "left" ? row.left : row.right;
+          return line !== null
+            ? ((item.side === "left" ? leftLines : rightLines)[line] ?? "")
+            : "";
+        }, wrapMetrics)
+      : unifiedBaseItems,
+  );
+
+  const unifiedCount = $derived(unifiedItems.length);
 
   /**
    * Gutter width for the current document.
@@ -581,30 +653,52 @@
   });
 
   /**
-   * Measure the monospace advance width after the font metrics are in effect.
+   * Measure Latin and fallback-CJK advances after the font metrics are in effect.
    *
-   * Done in an effect rather than inside the derived `wrapColumns`, because a
-   * derived value must be a pure function of its inputs: appending a probe element
-   * during evaluation would read layout mid-render and could loop. The effect runs
-   * after the CSS variables above are applied, so it measures the real font, and it
-   * re-runs on a font-size change.
+   * A monospace font makes every Latin cell identical, but that says nothing about
+   * the system fallback WebKit chooses for Chinese. Measuring both classes avoids
+   * treating a CJK glyph as exactly two Latin cells when its real advance is
+   * smaller. The probe reads layout only in an effect, after the CSS variables
+   * above have been applied, and is removed immediately.
    */
   $effect(() => {
     const fontSize = settings.fontSize;
-    const probe = document.createElement("span");
-    probe.textContent = "0".repeat(40);
-    probe.style.cssText =
-      `position:absolute;visibility:hidden;white-space:pre;` +
-      `font-family:var(--font-mono);font-size:${fontSize}px`;
-    document.body.appendChild(probe);
-    const width = probe.getBoundingClientRect().width;
-    probe.remove();
-    // A zero width means the element was not laid out (hidden window); keep the
-    // estimate rather than wrapping every line to one character.
-    if (width > 0) {
-      const next = width / 40;
-      if (Math.abs(next - charWidth) > 0.01) charWidth = next;
-    }
+    let cancelled = false;
+
+    const measure = () => {
+      const host = document.createElement("span");
+      host.style.cssText =
+        `position:absolute;visibility:hidden;white-space:pre;line-height:1;` +
+        `font-family:var(--font-mono);font-size:${fontSize}px`;
+      const latin = document.createElement("span");
+      latin.textContent = "0".repeat(80);
+      const wide = document.createElement("span");
+      wide.textContent = "中".repeat(80);
+      latin.style.cssText = wide.style.cssText = "display:inline-block;white-space:pre";
+      host.append(latin, wide);
+      document.body.appendChild(host);
+
+      const latinWidth = latin.getBoundingClientRect().width / 80;
+      const nextWideWidth = wide.getBoundingClientRect().width / 80;
+      host.remove();
+
+      // A zero width means the element was not laid out (hidden window); keep the
+      // estimates rather than wrapping every line to one character.
+      if (latinWidth > 0 && Math.abs(latinWidth - charWidth) > 0.01) {
+        charWidth = latinWidth;
+      }
+      if (nextWideWidth > 0 && Math.abs(nextWideWidth - wideCharWidth) > 0.01) {
+        wideCharWidth = nextWideWidth;
+      }
+    };
+
+    measure();
+    void document.fonts.ready.then(() => {
+      if (!cancelled) measure();
+    });
+    return () => {
+      cancelled = true;
+    };
   });
 
   /** Persist on every change; the write is a few hundred bytes. */
@@ -621,6 +715,63 @@
    */
   $effect(() => {
     setLocale(resolveLocale(settings.locale));
+  });
+
+  /**
+   * Wrapping is a no-horizontal-scroll mode.
+   *
+   * When the setting is enabled from the toolbar or the settings sheet, discard
+   * any horizontal offset retained from the unwrapped view. Keeping it would show
+   * the wrapped text shifted left with an empty strip on the right.
+   */
+  $effect(() => {
+    if (settings.wrapLines && scrollLeft !== 0) scrollLeft = 0;
+  });
+
+  /**
+   * Keep the wrap capacity tied to the current view.
+   *
+   * The body's size does not change when the paste screen is replaced by a diff,
+   * so observing only `.body` could leave every measured width at zero.
+   * In that state every line looked infinitely wide and the wrap toggle did
+   * nothing. Observing the split panes (or the unified host) also keeps the
+   * capacity correct while the divider moves or a side sheet narrows the work area.
+   */
+  $effect(() => {
+    const host = splitHost;
+    const mode = view;
+    if (!host) return;
+
+    const sides = [...host.querySelectorAll<HTMLElement>(".side")];
+    let frame = 0;
+
+    const measure = () => {
+      if (mode === "split") {
+        const left = sides[0]?.clientWidth ?? 0;
+        const right = sides[1]?.clientWidth ?? 0;
+        if (left > 0 && left !== leftPaneWidth) leftPaneWidth = left;
+        if (right > 0 && right !== rightPaneWidth) rightPaneWidth = right;
+        return;
+      }
+
+      const width = host.clientWidth;
+      if (width > 0 && width !== unifiedPaneWidth) unifiedPaneWidth = width;
+    };
+
+    measure();
+    // A view switch replaces the measured host in the same frame. Re-measure after
+    // layout so wrapping never keeps the previous view's width.
+    frame = requestAnimationFrame(measure);
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    if (sides.length > 0) {
+      for (const side of sides) observer.observe(side);
+    }
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   });
 
   /**
@@ -687,18 +838,18 @@
       const next = host?.clientHeight ?? 0;
       if (next > 0 && next !== viewportHeight) viewportHeight = next;
 
-      /*
-       * Measure one pane's width for wrapping.
-       *
-       * `splitHost` is bound inside the `{#if}` branch, so it is null until the
-       * comparison renders — the reason writing `splitHost.clientWidth` into the
-       * derived `wrapColumns` silently produced 0 and wrapping appeared dead on the
-       * first click. Reading the first `.side` element here, after layout, avoids
-       * depending on the binding's lifecycle.
-       */
-      const side = document.querySelector<HTMLElement>(".side");
-      const sideWidth = side?.clientWidth ?? 0;
-      if (sideWidth > 0 && sideWidth !== paneWidth) paneWidth = sideWidth;
+      // Fallback for the first frame before the pane observer above is attached.
+      const sides = [...document.querySelectorAll<HTMLElement>(".side")];
+      if (sides.length >= 2) {
+        const left = sides[0].clientWidth;
+        const right = sides[1].clientWidth;
+        if (left > 0 && left !== leftPaneWidth) leftPaneWidth = left;
+        if (right > 0 && right !== rightPaneWidth) rightPaneWidth = right;
+      } else {
+        const host = document.querySelector<HTMLElement>(".unified");
+        const next = host?.clientWidth ?? 0;
+        if (next > 0 && next !== unifiedPaneWidth) unifiedPaneWidth = next;
+      }
     };
     apply();
     requestAnimationFrame(apply);
@@ -725,6 +876,20 @@
     if (Object.keys(diffPatch).length > 0 && session) {
       await applyOptions(diffPatch);
     }
+  }
+
+  async function toggleViewMode(): Promise<void> {
+    view = view === "split" ? "unified" : "split";
+    if (!searchOpen || activeSearchHit === null) return;
+    await tick();
+    await scrollToSearchHit(activeSearchHit);
+  }
+
+  async function toggleWrapLines(): Promise<void> {
+    await patchSettings({ wrapLines: !settings.wrapLines });
+    if (!searchOpen || activeSearchHit === null) return;
+    await tick();
+    await scrollToSearchHit(activeSearchHit);
   }
 
   function resetSettings(): void {
@@ -840,10 +1005,11 @@
 
   /** Adopt a tab's saved view state. */
   function restoreView(tab: Tab): void {
+    closeSearch();
     view = tab.view;
     expanded = new Set(tab.expanded);
     scrollTop = tab.scrollTop;
-    scrollLeft = tab.scrollLeft;
+    scrollLeft = settings.wrapLines ? 0 : tab.scrollLeft;
     navHunk = null;
     editing = false;
     // Claim the pending offset so the pane's echo is not mistaken for a user scroll.
@@ -890,6 +1056,11 @@
   /** Reorder tabs after a drag. */
   function moveTabTo(from: number, to: number): void {
     tabs = moveTab(tabs, from, to);
+  }
+
+  /** Set or clear one tab's custom name. */
+  function renameTab(id: string, name: string): void {
+    tabs = renameTabIn(tabs, id, name);
   }
 
   // --- history ----------------------------------------------------------
@@ -964,6 +1135,7 @@
       // One sheet at a time; see the note on `gitOpen`.
       settingsOpen = false;
       gitOpen = false;
+      closeSearch();
     }
     historyOpen = !historyOpen;
     if (historyOpen) void refreshHistory();
@@ -973,9 +1145,9 @@
    * Reopen a stored comparison as a new tab.
    *
    * The texts go back through `set_both` rather than being diffed in the
-   * frontend: the result is not stored (it would go stale as soon as an
-   * algorithm default or an ignore option changed), so the backend recomputes it
-   * exactly as it would for a fresh paste.
+   * frontend: the result is not stored (it would go stale as soon as an ignore
+   * option changed), so the backend recomputes it exactly as it would for a
+   * fresh paste.
    *
    * The sheet closes first — the point of picking an entry is to look at it.
    */
@@ -983,6 +1155,7 @@
     try {
       const entry = await ipc.historyLoad(id);
       historyOpen = false;
+      closeSearch();
       const restored = sessionFromEntry(entry);
       // A recovered comparison is already on disk, so it is not re-recorded:
       // reopening the same entry ten times must not create ten rows.
@@ -1079,11 +1252,17 @@
    * line so the pane header says what is being compared.
    */
   async function submitText(pair: PastePair): Promise<void> {
+    closeSearch();
     const toSide = (block: PasteBlock): Side => ({
       path: block.path,
       label: block.path ? block.label : labelForText(block.text),
       text: block.text,
     });
+    // A new comparison has new row and column coordinates; never inherit the
+    // previous document's reading position.
+    scrollTop = 0;
+    scrollLeft = 0;
+    navHunk = null;
     await commit(ipc.setBoth(toSide(pair.left), toSide(pair.right)));
   }
 
@@ -1196,6 +1375,7 @@
     if (!gitOpen) {
       settingsOpen = false;
       historyOpen = false;
+      closeSearch();
     }
     gitOpen = !gitOpen;
   }
@@ -1207,6 +1387,7 @@
 
   function startEditing(): void {
     if (!session) return;
+    closeSearch();
     draftLeft = session.left.text;
     draftRight = session.right.text;
     editing = true;
@@ -1345,7 +1526,11 @@
   function handleUnifiedScroll(next: { top: number; left: number }): void {
     const moved = Math.abs(next.top - scrollTop) >= 0.5;
     if (moved) scrollTop = next.top;
-    if (Math.abs(next.left - scrollLeft) >= 0.5) scrollLeft = next.left;
+    if (settings.wrapLines) {
+      if (scrollLeft !== 0) scrollLeft = 0;
+    } else if (Math.abs(next.left - scrollLeft) >= 0.5) {
+      scrollLeft = next.left;
+    }
     if (moved) navHunk = null;
   }
 
@@ -1353,7 +1538,11 @@
   function handleScroll(next: { top: number; left: number }): void {
     const moved = Math.abs(next.top - scrollTop) >= 0.5;
     if (moved) scrollTop = next.top;
-    if (Math.abs(next.left - scrollLeft) >= 0.5) scrollLeft = next.left;
+    if (settings.wrapLines) {
+      if (scrollLeft !== 0) scrollLeft = 0;
+    } else if (Math.abs(next.left - scrollLeft) >= 0.5) {
+      scrollLeft = next.left;
+    }
     // Only a scroll that did not land on our commanded offset counts as manual.
     if (moved) {
       const isOurs =
@@ -1650,9 +1839,126 @@
     );
   }
 
+  // --- search -----------------------------------------------------------
+
+  function closeSearch(): void {
+    searchOpen = false;
+    searchGeneration++;
+  }
+
+  function openSearch(): void {
+    if (!session || !hasContent || editing) return;
+    settingsOpen = false;
+    gitOpen = false;
+    historyOpen = false;
+    if (!searchOpen) {
+      searchOpen = true;
+      void anchorFirstSearchHit();
+      return;
+    }
+    const input = document.querySelector<HTMLInputElement>(".findbar input");
+    input?.focus();
+    input?.select();
+  }
+
+  function toggleSearch(): void {
+    if (!session || !hasContent || editing) return;
+    if (searchOpen) {
+      closeSearch();
+      return;
+    }
+    openSearch();
+  }
+
+  /**
+   * Jump to the first result after a live query change.
+   *
+   * The generation token prevents an older `tick` from dragging the viewport
+   * back while the user is still typing.
+   */
+  async function anchorFirstSearchHit(): Promise<void> {
+    const generation = ++searchGeneration;
+    searchIndex = 0;
+    if (searchQuery.length === 0) return;
+    await tick();
+    if (generation !== searchGeneration) return;
+    const first = searchHits[0];
+    if (!first) return;
+    navHunk = null;
+    await scrollToSearchHit(first);
+  }
+
+  function updateSearchQuery(query: string): void {
+    searchQuery = query;
+    void anchorFirstSearchHit();
+  }
+
+  function toggleSearchCase(): void {
+    searchCaseSensitive = !searchCaseSensitive;
+    void anchorFirstSearchHit();
+  }
+
+  /** Step through hits with wraparound, like every native find bar. */
+  async function stepSearch(direction: 1 | -1): Promise<void> {
+    if (!searchOpen || searchHits.length === 0) return;
+    searchGeneration++;
+    searchIndex = (searchIndex + direction + searchHits.length) % searchHits.length;
+    navHunk = null;
+    await scrollToSearchHit(searchHits[searchIndex]);
+  }
+
+  /**
+   * Scroll to the exact physical wrap slice containing a hit.
+   *
+   * `scrollToRow` is the right anchor for hunk navigation, but a wrapped line can
+   * span many display rows. Resolving the offset-aware index keeps the highlighted
+   * occurrence itself on screen instead of merely its first slice.
+   */
+  async function scrollToSearchHit(hit: SearchHit): Promise<void> {
+    if (view === "split") {
+      const hiddenBy = foldHidingRow(items, hit.row);
+      if (hiddenBy !== null) {
+        const next = new Set(expanded);
+        next.add(hiddenBy);
+        expanded = next;
+        await tick();
+      }
+    } else {
+      const hiddenBy = unifiedFoldHidingRow(unifiedItems, hit.row);
+      if (hiddenBy !== null) {
+        const next = new Set(expanded);
+        next.add(hiddenBy);
+        expanded = next;
+        await tick();
+      }
+    }
+
+    const index =
+      view === "split"
+        ? (splitDisplayIndexForHit(items, hit) ?? displayIndexForRow(items, hit.row))
+        : (unifiedDisplayIndexForHit(unifiedItems, hit) ?? unifiedIndexIn(unifiedItems, hit.row));
+    const count = view === "split" ? items.length : unifiedCount;
+    const target = scrollTopToRow(
+      index,
+      viewportHeight,
+      count,
+      rowHeight,
+      metrics.jumpContext,
+    );
+    programmaticTarget = target;
+    scrollTop = target;
+    await tick();
+  }
+
   // --- keyboard ---------------------------------------------------------
 
   function handleKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape" && searchOpen) {
+      event.preventDefault();
+      closeSearch();
+      return;
+    }
+
     const meta = event.metaKey || event.ctrlKey;
     if (!meta) return;
 
@@ -1702,7 +2008,14 @@
 
       case "d":
         event.preventDefault();
-        view = view === "split" ? "unified" : "split";
+        void toggleViewMode();
+        break;
+      case "f":
+      case "F":
+        if (!event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          openSearch();
+        }
         break;
       case "e":
       case "E":
@@ -1717,6 +2030,7 @@
         if (!settingsOpen) {
           gitOpen = false;
           historyOpen = false;
+          closeSearch();
         }
         settingsOpen = !settingsOpen;
         break;
@@ -1779,6 +2093,7 @@
       untitledLabel={$t("tabs.untitled")}
       onActivate={activateTab}
       onClose={closeTab}
+      onRename={renameTab}
       onNew={openNewTab}
       onMove={moveTabTo}
     />
@@ -1790,7 +2105,7 @@
     {busy}
     {themeMode}
     onNew={() => void clearAll()}
-    onToggleView={() => (view = view === "split" ? "unified" : "split")}
+    onToggleView={() => void toggleViewMode()}
     onOptions={applyOptions}
     onTheme={(mode) => void patchSettings({ theme: mode })}
     onJumpPrev={() => jumpToHunk(-1)}
@@ -1804,13 +2119,16 @@
       if (!settingsOpen) {
         gitOpen = false;
         historyOpen = false;
+        closeSearch();
       }
       settingsOpen = !settingsOpen;
     }}
     {editing}
     onToggleEdit={() => (editing ? cancelEditing() : startEditing())}
+    {searchOpen}
+    onToggleSearch={toggleSearch}
     wrapLines={settings.wrapLines}
-    onToggleWrap={() => void patchSettings({ wrapLines: !settings.wrapLines })}
+    onToggleWrap={() => void toggleWrapLines()}
     {gitOpen}
     onToggleGit={toggleGit}
     {historyOpen}
@@ -1914,9 +2232,11 @@
             win={splitWin}
             {hovered}
             {scrollTop}
-            {scrollLeft}
+            scrollLeft={settings.wrapLines ? 0 : scrollLeft}
+            wrapped={settings.wrapLines}
             activeHunk={activeHunkRows}
             tokens={leftTokens}
+            search={searchView}
             onScroll={handleScroll}
             onExpandFold={expandFold}
             onCollapseFold={collapseFold}
@@ -1974,9 +2294,11 @@
             win={splitWin}
             {hovered}
             {scrollTop}
-            {scrollLeft}
+            scrollLeft={settings.wrapLines ? 0 : scrollLeft}
+            wrapped={settings.wrapLines}
             activeHunk={activeHunkRows}
             tokens={rightTokens}
+            search={searchView}
             onScroll={handleScroll}
             onExpandFold={expandFold}
             onCollapseFold={collapseFold}
@@ -2014,8 +2336,10 @@
           offsetY={unifiedWin.offsetY}
           activeHunk={activeHunkRows}
           scrollOffset={scrollTop}
+          wrapped={settings.wrapLines}
           leftTokens={leftTokens}
           rightTokens={rightTokens}
+          search={searchView}
           onScroll={handleUnifiedScroll}
           onExpandFold={expandFold}
         />
@@ -2043,6 +2367,21 @@
         onDelete={(id) => void deleteHistoryEntry(id)}
         onClear={() => void clearHistory()}
         onClose={() => (historyOpen = false)}
+      />
+    {/if}
+
+    {#if searchOpen}
+      <SearchBar
+        query={searchQuery}
+        resultCount={searchHits.length}
+        activeIndex={searchHits.length === 0 ? -1 : Math.min(searchIndex, searchHits.length - 1)}
+        activeLine={activeSearchHit?.line ?? null}
+        caseSensitive={searchCaseSensitive}
+        onQuery={updateSearchQuery}
+        onPrevious={() => void stepSearch(-1)}
+        onNext={() => void stepSearch(1)}
+        onToggleCase={toggleSearchCase}
+        onClose={closeSearch}
       />
     {/if}
   </div>
@@ -2136,6 +2475,7 @@
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
+    position: relative;
   }
 
   .split {

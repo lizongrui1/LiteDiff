@@ -15,6 +15,8 @@
  * keep working against a concrete palette.
  */
 
+import type { RowKind, SideName } from "./types";
+
 /** 0-255 channels, so alpha can be re-applied per theme without string surgery. */
 type RGB = readonly [number, number, number];
 
@@ -105,6 +107,22 @@ export interface Look {
   accent: string;
   scheme: SchemeName;
   intensity: IntensityName;
+}
+
+export type RowTint = "none" | "del" | "ins";
+
+/**
+ * Colour role for one cell.
+ *
+ * A padded cell is not a deleted or inserted line: it only keeps the opposite
+ * column aligned with a change on the other side. Giving it the change colour made
+ * a run of right-side insertions look like green lines in the left pane.
+ */
+export function rowTint(kind: RowKind, side: SideName, padded: boolean): RowTint {
+  if (padded) return "none";
+  if (kind === "delete" || (kind === "modify" && side === "left")) return "del";
+  if (kind === "insert" || (kind === "modify" && side === "right")) return "ins";
+  return "none";
 }
 
 /**

@@ -40,7 +40,6 @@ const session = (left: Side, right: Side, over: Partial<Session> = {}): Session 
     stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
   },
   options: {
-    algorithm: "myers",
     ignore_whitespace: false,
     ignore_all_whitespace: false,
     ignore_case: false,
@@ -160,7 +159,7 @@ test("a session survives a save/restore round trip", () => {
   const original = session(
     side({ label: "a.go", path: "/p/a.go", text: "package a\n" }),
     side({ label: "b.go", path: null, text: "package b\n" }),
-    { options: { ...session(side(), side()).options, ignore_case: true, algorithm: "patience" } },
+    { options: { ...session(side(), side()).options, ignore_case: true } },
   );
 
   const entry = entryFromSession(original, 1_700_000_000_000);
@@ -173,13 +172,12 @@ test("a session survives a save/restore round trip", () => {
   assert.equal(restored.left.path, "/p/a.go");
   assert.equal(restored.right.path, null, "a pasted side stays path-less");
   assert.equal(restored.options.ignore_case, true);
-  assert.equal(restored.options.algorithm, "patience");
 });
 
 test("a restored session carries no diff result and no git origin", () => {
   /*
-   * Both are deliberate. A stored result would go stale as soon as an algorithm
-   * default changed, and a restored git side is text without a revision context —
+   * Both are deliberate. A stored result would go stale as soon as an option
+   * changed, and a restored git side is text without a revision context —
    * keeping a stale `git` marker would make `⌘S` believe it may write a blob.
    */
   const entry = entryFromSession(session(side({ text: "a" }), side({ text: "b" })), 1);
@@ -188,12 +186,4 @@ test("a restored session carries no diff result and no git origin", () => {
   assert.equal(restored.result.hunks.length, 0);
   assert.equal(restored.left.git, null);
   assert.equal(restored.right.git, null);
-});
-
-test("an unknown stored algorithm falls back to myers", () => {
-  // A future build could store a third algorithm; an old build must still open
-  // the entry rather than refusing it.
-  const entry = entryFromSession(session(side(), side()), 1);
-  entry.options.algorithm = "quantum";
-  assert.equal(sessionFromEntry(entry).options.algorithm, "myers");
 });

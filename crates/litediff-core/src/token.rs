@@ -108,8 +108,7 @@ fn tokenize(line: &str, table: &mut TokenTable, fold_case: bool) -> Vec<Token> {
                     break;
                 }
                 // `lower|digit` -> `Upper` opens a new camelCase part.
-                let boundary =
-                    matches!(prev, Some(p) if (p.is_lowercase() || p.is_numeric()) && c.is_uppercase());
+                let boundary = matches!(prev, Some(p) if (p.is_lowercase() || p.is_numeric()) && c.is_uppercase());
                 if boundary && i > word_start {
                     let id = table.intern(&line[word_start..i], fold_case);
                     tokens.push(Token {
@@ -262,12 +261,12 @@ pub fn segments(line: &str, ranges: &[CharRange]) -> Vec<InlineSegment> {
         }
         debug_assert!(start >= cursor, "ranges must ascend and not overlap");
         if start > cursor {
-            out.push(InlineSegment::same(&char_slice(line, cursor, start), cursor));
+            out.push(InlineSegment::same(
+                &char_slice(line, cursor, start),
+                cursor,
+            ));
         }
-        out.push(InlineSegment::changed(
-            &char_slice(line, start, end),
-            start,
-        ));
+        out.push(InlineSegment::changed(&char_slice(line, start, end), start));
         cursor = end;
     }
 
@@ -298,10 +297,7 @@ pub fn diff_line(
     options: &DiffOptions,
 ) -> Option<(Vec<InlineSegment>, Vec<InlineSegment>)> {
     let (left_ranges, right_ranges) = changed_ranges(left, right, options)?;
-    Some((
-        segments(left, &left_ranges),
-        segments(right, &right_ranges),
-    ))
+    Some((segments(left, &left_ranges), segments(right, &right_ranges)))
 }
 
 /// The whole line as one changed segment, for the fallback path.

@@ -28,12 +28,20 @@ import type { Session } from "./types";
 export interface Tab {
   /** Stable identity, used as the `{#each}` key and for lookups. */
   id: string;
+  /** User-defined label; `null` keeps the automatic session-derived label. */
+  name: string | null;
   session: Session;
   view: "split" | "unified";
   /** Hunk indices the user expanded in this tab. */
   expanded: Set<number>;
   scrollTop: number;
   scrollLeft: number;
+}
+
+/** Trim a user-entered tab name and treat whitespace-only input as automatic. */
+export function normalizeTabName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed === "" ? null : trimmed;
 }
 
 /**
@@ -49,7 +57,11 @@ export function tabLabel(
   session: Session,
   pastedLabel: string,
   untitledLabel: string = pastedLabel,
+  customName: string | null = null,
 ): string {
+  const custom = normalizeTabName(customName);
+  if (custom !== null) return custom;
+
   const name = (side: Session["left"]): string => {
     const source = side.path ?? side.git?.file ?? "";
     if (!source) return "";
@@ -91,12 +103,24 @@ let nextId = 1;
 export function createTab(session: Session): Tab {
   return {
     id: `tab-${nextId++}`,
+    name: null,
     session,
     view: "split",
     expanded: new Set(),
     scrollTop: 0,
     scrollLeft: 0,
   };
+}
+
+/**
+ * Rename one tab without disturbing its identity, order, or saved view state.
+ *
+ * A blank name restores the automatic label rather than leaving an unnamed tab
+ * with no visible title.
+ */
+export function renameTab(tabs: readonly Tab[], id: string, name: string): Tab[] {
+  const custom = normalizeTabName(name);
+  return tabs.map((tab) => (tab.id === id ? { ...tab, name: custom } : tab));
 }
 
 /**
@@ -122,7 +146,6 @@ export function emptySession(): Session {
       stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
     },
     options: {
-      algorithm: "myers",
       ignore_whitespace: false,
       ignore_all_whitespace: false,
       ignore_case: false,

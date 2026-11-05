@@ -53,7 +53,6 @@ certutil -hashfile <file> SHA256  # Windows
 **Diff engine** (pure Rust, no third-party runtime dependencies)
 
 - Linear-space Myers with middle-snake and common prefix/suffix trimming; peak memory is O(N+M), and optimality is validated against a DP LCS oracle
-- Patience diff with unique-line anchors and LIS for more stable results on large refactors
 - Word-level inline highlighting: `foo_bar` -> `foo_baz` highlights only `bar`/`baz` instead of splitting every character
 - Ignore leading/trailing whitespace, all whitespace, or letter case; CRLF and LF are treated as equivalent
 
@@ -98,6 +97,7 @@ certutil -hashfile <file> SHA256  # Windows
 | <kbd>⌘</kbd><kbd>D</kbd> | Toggle split / inline view |
 | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>W</kbd> | Ignore leading/trailing whitespace and line endings |
 | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>E</kbd> | Expand / collapse all unchanged regions |
+| <kbd>⌘</kbd><kbd>F</kbd> | Find in the current comparison |
 | <kbd>⌘</kbd><kbd>S</kbd> | Save |
 | <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>N</kbd> | New tab (return to paste screen while keeping existing comparisons) |
 | <kbd>⌘</kbd><kbd>W</kbd> | Close current tab |

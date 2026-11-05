@@ -19,7 +19,7 @@ pub mod history;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use litediff_core::{DiffOptions, DiffResult, LineAlgorithm, SourceText};
+use litediff_core::{DiffOptions, DiffResult, SourceText};
 use serde::{Deserialize, Serialize};
 
 /// Where a side came from, when it came from a git revision rather than a file.
@@ -78,7 +78,6 @@ pub struct Session {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OptionsPatch {
-    pub algorithm: Option<String>,
     pub ignore_whitespace: Option<bool>,
     pub ignore_all_whitespace: Option<bool>,
     pub ignore_case: Option<bool>,
@@ -89,12 +88,6 @@ impl OptionsPatch {
     /// Fold a partial UI patch onto a base config.
     pub fn apply_to(&self, base: &DiffOptions) -> DiffOptions {
         let mut out = base.clone();
-        if let Some(algo) = &self.algorithm {
-            out.algorithm = match algo.as_str() {
-                "patience" => LineAlgorithm::Patience,
-                _ => LineAlgorithm::Myers,
-            };
-        }
         if let Some(v) = self.ignore_whitespace {
             out.ignore_whitespace = v;
         }
@@ -272,24 +265,7 @@ mod tests {
         };
         let out = patch.apply_to(&base);
         assert!(out.ignore_case);
-        assert_eq!(out.algorithm, base.algorithm);
         assert_eq!(out.intra_line, base.intra_line);
-    }
-
-    #[test]
-    fn options_patch_maps_algorithm_names() {
-        let base = DiffOptions::default();
-        let patch = OptionsPatch {
-            algorithm: Some("patience".into()),
-            ..Default::default()
-        };
-        assert_eq!(patch.apply_to(&base).algorithm, LineAlgorithm::Patience);
-
-        let patch = OptionsPatch {
-            algorithm: Some("myers".into()),
-            ..Default::default()
-        };
-        assert_eq!(patch.apply_to(&base).algorithm, LineAlgorithm::Myers);
     }
 
     #[test]
@@ -336,7 +312,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains("litediff-tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -367,7 +346,10 @@ mod tests {
 
         let (text, warning) = read_text_file(&path).unwrap();
         assert!(!text.is_empty());
-        assert!(warning.is_some(), "invalid UTF-8 must be surfaced to the UI");
+        assert!(
+            warning.is_some(),
+            "invalid UTF-8 must be surfaced to the UI"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -393,8 +375,20 @@ mod tests {
     #[test]
     fn toggling_options_rediffs_from_cached_sources() {
         let state = AppState::default();
-        state.set_side(SideKind::Left, Side { text: "a\n".into(), ..Default::default() });
-        state.set_side(SideKind::Right, Side { text: "a  \n".into(), ..Default::default() });
+        state.set_side(
+            SideKind::Left,
+            Side {
+                text: "a\n".into(),
+                ..Default::default()
+            },
+        );
+        state.set_side(
+            SideKind::Right,
+            Side {
+                text: "a  \n".into(),
+                ..Default::default()
+            },
+        );
 
         let strict = state.diff();
         assert!(!strict.result.is_identical());

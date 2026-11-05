@@ -58,7 +58,9 @@ impl SourceText {
 
     /// All lines as string slices, in order.
     pub fn line_strs(&self) -> impl Iterator<Item = &str> + '_ {
-        self.lines.iter().map(move |l| &self.text[l.start as usize..l.end as usize])
+        self.lines
+            .iter()
+            .map(move |l| &self.text[l.start as usize..l.end as usize])
     }
 }
 

@@ -12,10 +12,9 @@ LiteDiff/
     │   ├── model.rs               # 数据结构：DiffOptions/LineOp/AlignedRow/Hunk/DiffStats
     │   ├── intern.rs               # 行 → u32 符号，跨双侧共享（忽略空白/大小写在此生效）
     │   ├── myers.rs                # 线性空间 Myers（中间蛇 + 前后缀剥离 + 迭代栈）
-    │   ├── patience.rs             # Patience 锚点 + LIS，无锚点区域回退 Myers
     │   ├── token.rs                # 词/字符级 diff → 高饱和色块所需的 char range
     │   └── align.rs                # edit script → 等高低栏行 + hunk 状态机
-    └── tests/engine.rs             # 19 个端到端验收测试
+    └── tests/engine.rs             # 端到端验收测试
 ```
 
 ## 数据流（每层都是纯函数）
@@ -23,7 +22,7 @@ LiteDiff/
 ```
 SourceText            字节 → 行区间（无内容拷贝）
   → intern            行 → u32（符号表双侧共享，忽略规则在此归一）
-  → myers / patience  符号序 → 升序匹配对
+  → myers             符号序 → 升序匹配对
   → ops_from_matches  匹配对 → LineOp 编辑脚本（Equal/Delete/Insert）
   → align::build      脚本 → 带填充的等高行 + Hunk + Stats
   → token::diff_line  Modify 行 → InlineSegment（changed 标记）
@@ -40,8 +39,8 @@ Myers 的内层循环每步都要比较元素。比较 4 字节整数远快于 `
 **最优性由测试兜底**
 `myers.rs` 内建一个 DP LCS 暴力解作为 oracle，断言"匹配数 == LCS 长度"，并对 40 组随机低字母表输入（重复符号最多的情况）逐一验证。这是唯一能证明编辑脚本最小的方法 —— 这类 bug 靠肉眼读代码看不出来。
 
-**Patience 与 Myers 并存**
-Myers 给最小编辑距离，但在大重构下会把无关的 `}` 配到一起，读数很差。Patience 只锚定"两侧都只出现一次"的行，用 LIS 取最长升序链，再对空隙递归。无锚点时回退 Myers —— 两者都暴露在 `DiffOptions::algorithm`。
+**只保留 Myers**
+Myers 是最主流的行级 diff 算法，也是 Git 与经典 diff 工具的默认选择。为保持界面和配置简洁，LiteDiff 不再暴露算法切换；行级对齐和行内高亮都使用 Myers。
 
 **Token 级而不是字符级**
 `foo_bar` → `foo_baz` 若按字符 diff 会只高亮 `r`/`z`。这里先按空白段 / 标识符 / 标点切词，标识符再在 camelCase 边界二次切分，`_` 作为独立分隔符。结果：只高亮 `bar`/`baz`。标识符按小写 intern，所以 `Foo` → `foo` 不算文本变更。
@@ -72,7 +71,7 @@ cargo clippy --all-targets   # 0 warnings
 cargo build --release        # liblitediff_core.rlib ≈ 393 KB
 ```
 
-覆盖：空文档、纯插入/纯删除、替换块配对与填充、CRLF 与 LF 等价、含 emoji/CJK 的 Unicode 行、忽略空白/忽略大小写、两种算法一致性、确定性、20k 行 + 50 处改动的性能（断言 < 5s，实测约 10ms）、hunk 平铺不重叠、`hunk_at_row` 二分查找、行内段拼接可无损还原原文。
+覆盖：空文档、纯插入/纯删除、替换块配对与填充、CRLF 与 LF 等价、含 emoji/CJK 的 Unicode 行、忽略空白/忽略大小写、确定性、20k 行 + 50 处改动的性能（断言 < 5s，实测约 10ms）、hunk 平铺不重叠、`hunk_at_row` 二分查找、行内段拼接可无损还原原文。
 
 ## 尚未做（按约定等确认后进 Step 2）
 

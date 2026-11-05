@@ -21,10 +21,16 @@ fn main() {
             .collect();
         names.sort();
         for name in names {
-            println!("cargo:rerun-if-changed={}", dist.join("assets").join(name).display());
+            println!(
+                "cargo:rerun-if-changed={}",
+                dist.join("assets").join(name).display()
+            );
         }
     }
-    println!("cargo:rerun-if-changed={}", dist.join("index.html").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        dist.join("index.html").display()
+    );
 
     tauri_build::build()
 }

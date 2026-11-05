@@ -112,6 +112,25 @@
   }
 
   /**
+   * A whole-document paste lands the caret at the end, and a long line makes the
+   * browser scroll the textarea there. Reset after the native insertion so the
+   * pasted content starts at the top-left instead of looking empty at the tail.
+   */
+  function resetViewAfterFullPaste(event: ClipboardEvent): void {
+    const field = event.currentTarget;
+    if (!(field instanceof HTMLTextAreaElement)) return;
+    const replacesEverything =
+      field.value === "" ||
+      (field.selectionStart === 0 && field.selectionEnd === field.value.length);
+    if (!replacesEverything) return;
+
+    requestAnimationFrame(() => {
+      field.scrollTop = 0;
+      field.scrollLeft = 0;
+    });
+  }
+
+  /**
    * `Tab` crosses to the other side; every other key types normally.
    *
    * There is no "compare" key: the comparison is automatic and continuous, so a
@@ -191,6 +210,7 @@
         <textarea
           value={text}
           oninput={(e) => setText(side, e.currentTarget.value)}
+          onpaste={resetViewAfterFullPaste}
           data-side={side}
           onfocus={() => (focused = side)}
           onblur={() => {

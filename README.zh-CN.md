@@ -53,7 +53,6 @@ certutil -hashfile <文件名> SHA256  # Windows
 **比对引擎**（纯 Rust，零第三方依赖）
 
 - 线性空间 Myers（中间蛇 + 前后缀剥离），峰值内存 O(N+M)，最优性由 DP LCS oracle 验证
-- Patience 算法（唯一行锚点 + LIS），大重构下读数更稳
 - 词级行内高亮：`foo_bar` → `foo_baz` 只高亮 `bar`/`baz`，不按字符切碎
 - 支持忽略首尾空白 / 全部空白 / 大小写；CRLF 与 LF 等价
 
@@ -98,6 +97,7 @@ certutil -hashfile <文件名> SHA256  # Windows
 | <kbd>⌘</kbd><kbd>D</kbd> | 切换左右 / 行内视图 |
 | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>W</kbd> | 忽略首尾空白与换行符 |
 | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>E</kbd> | 展开 / 折叠全部未变动区块 |
+| <kbd>⌘</kbd><kbd>F</kbd> | 在当前对比中搜索 |
 | <kbd>⌘</kbd><kbd>S</kbd> | 保存 |
 | <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>N</kbd> | 新建标签页（回到粘贴界面，已有对比保留） |
 | <kbd>⌘</kbd><kbd>W</kbd> | 关闭当前标签页 |

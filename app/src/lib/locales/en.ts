@@ -48,6 +48,8 @@ export const en = {
   "tabs.label": "Open comparisons",
   "tabs.close": "Close this tab",
   "tabs.new": "New comparison",
+  "tabs.rename": "Rename tab",
+  "tabs.renameHint": "Double-click a tab name to rename · F2",
   "tabs.pasted": "Pasted comparison",
   "tabs.untitled": "New comparison",
 
@@ -69,13 +71,14 @@ export const en = {
   "toolbar.wrapOn": "Wrap long lines: on",
   "toolbar.wrapOff": "Wrap long lines: off",
   "toolbar.wrap": "Wrap long lines",
+  "toolbar.search": "Search",
+  "toolbar.searchTitle": "Find in this comparison (⌘F)",
   "toolbar.prevDiff": "Previous difference",
   "toolbar.prevDiffTitle": "Previous difference (⌘[)",
   "toolbar.nextDiff": "Next difference",
   "toolbar.nextDiffTitle": "Next difference (⌘])",
   "toolbar.ignoreWhitespace": "Ignore whitespace",
   "toolbar.ignoreWhitespaceTitle": "Ignore leading/trailing whitespace and line endings (⌘⇧W)",
-  "toolbar.algorithmTitle": "Switch comparison algorithm",
   "toolbar.expandAll": "Expand all",
   "toolbar.expandAllTitle": "Expand every unchanged block (⌘⌥E)",
   "toolbar.collapseAll": "Collapse all",
@@ -86,6 +89,16 @@ export const en = {
   "toolbar.busy": "Comparing",
   "toolbar.settings": "Settings",
   "toolbar.settingsTitle": "Settings (⌘,)",
+
+  // --- find bar -----------------------------------------------------------
+  "search.label": "Find in this comparison",
+  "search.placeholder": "Find text…",
+  "search.noResults": "No results",
+  "search.position": "{index} of {total}",
+  "search.caseSensitive": "Match case",
+  "search.previous": "Previous match (⇧↵)",
+  "search.next": "Next match (↵)",
+  "search.close": "Close find (Esc)",
 
   // --- appearance ---------------------------------------------------------
   "theme.light": "Light",
