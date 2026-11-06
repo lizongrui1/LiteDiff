@@ -10,12 +10,12 @@ name: Release
 # — once an asset URL is public, someone's download link may already point at it —
 # so the workflow prepares everything and a human presses publish.
 #
-# ## Why `macos-14` and `windows-2022`
+# ## Why `macos-15` and `windows-2022`
 #
-# Both are the oldest images that still build a modern Rust toolchain without a
-# custom setup step. `macos-14` is arm64, which matches the majority of Macs in use;
-# an Intel build is produced separately on `macos-15-intel` because a single universal
-# binary would double the download for everyone.
+# These are stable images that build a modern Rust toolchain without a custom setup
+# step. `macos-15` is arm64, which matches the majority of Macs in use; an Intel
+# build is produced separately on `macos-15-intel` because a single universal binary
+# would double the download for everyone.
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
   # --- macOS (Apple Silicon) -------------------------------------------------
   macos-arm64:
     name: macOS (arm64)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
