@@ -1,0 +1,4 @@
+interface:
+  display_name: "LiteDiff SDD"
+  short_description: "Route LiteDiff work through specs, risk gates, and verification"
+  default_prompt: "Use $litediff-sdd to implement this LiteDiff change through the repository SDD workflow."

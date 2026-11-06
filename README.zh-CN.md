@@ -79,8 +79,9 @@ certutil -hashfile <文件名> SHA256  # Windows
 
 - 打开任意本地仓库，按路径筛选文件
 - 对比「工作区」与任意历史提交，或两个历史提交之间
-- 与历史版本比对时，⌘S 不会写回（历史内容只读）
-  - 通过系统 `git` 命令读取，只调用 `rev-parse` / `log` / `show` / `ls-files`，不会修改仓库
+- 历史版本始终只读；与工作区比较时，⌘S 只能保存持有有效后端能力的工作区文件
+- 读取 Git 时禁用仓库 hooks、fsmonitor、外部 diff、签名展示和不必要的全局配置
+- 本地分支切换有严格限制：脏工作区不强制执行，仓库配置中的 content filter 不允许运行
 
 **对比历史**
 
@@ -111,7 +112,7 @@ certutil -hashfile <文件名> SHA256  # Windows
 
 ```bash
 # 依赖
-cd app && npm install && cd ..
+cd app && npm ci && cd ..
 
 # 测试
 cargo test                # Rust
@@ -129,6 +130,17 @@ powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
 
 开发模式需两个终端：`cd app && npm run dev` 与 `cargo run -p litediff-app`。
 
+## 开发规范
+
+LiteDiff 使用轻量、仓库原生的 Spec-Driven Development（SDD）流程。修改行为前请先阅读：
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)：环境、改动分级、测试和 PR 要求
+- [docs/sdd/workflow.md](docs/sdd/workflow.md)：L0-L3 分级流程
+- [specs/product/litediff.md](specs/product/litediff.md)：当前产品、安全与性能基线
+- [AGENTS.md](AGENTS.md)：仓库级 AI/自动化工作规则
+
+完整质量门禁：macOS/Linux/Git Bash 运行 `bash scripts/verify.sh`；Windows 运行 `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`。
+
 ## 系统要求
 
 - **macOS 11+**（Big Sur 及以上），Apple Silicon 与 Intel 均提供原生构建，安装包约 2.3 MB
@@ -137,20 +149,20 @@ powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
 ## 架构
 
 ```
-Svelte 5 前端 ──IPC（一次传全量 Session）── Tauri v2 后端 ── litediff-core
+Svelte 5 前端 ──IPC（Session / SessionUpdate）── Tauri v2 后端 ── litediff-core
 ```
 
 **三个关键决策**
 
-- **IPC 一次传全量**：前端无状态，滚动永不等待后端；虚拟化纯在 DOM 侧
+- **IPC 传不可变会话快照**：首次比较包含两侧文档，仅切换选项时使用 `SessionUpdate`，省略未变化源文本
 - **滚动单一权威**：面板只上报 `scrollTop`，`App` 存一个数回灌两栏，同像素天然对齐
 - **折叠是投影**：`buildDisplay()` 把 hunk 投影成显示项。注意显示索引与源行索引是两套坐标系，跳转必须投影
 
 ## 测试
 
 ```bash
-cargo test      # 102 个
-npm test        # 173 个（在 app/ 下）
+cargo test      # Rust
+npm test        # 前端（在 app/ 下）
 ```
 
 Rust 侧核心是**最优性验证**：内置 DP LCS 暴力解作为 oracle，断言「匹配数 == LCS 长度」，并对 40 组随机低字母表输入逐一核对。开发中它抓出过两次中间蛇重叠判定的错误。
@@ -161,5 +173,4 @@ Rust 侧核心是**最优性验证**：内置 DP LCS 暴力解作为 oracle，�
 |---|---|
 | 就地编辑 | 与虚拟滚动冲突：需要可聚焦输入元素，而虚拟滚动会回收 DOM |
 | 「采纳更改」箭头 | 依赖就地编辑的缓冲区模型 |
-| 行内视图折叠 | 分栏视图有，行内视图未接 |
 | 大文件 | 整文件一次性比对，未做分块流式 |

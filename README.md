@@ -79,8 +79,9 @@ certutil -hashfile <file> SHA256  # Windows
 
 - Open any local repository and filter files by path
 - Compare the working tree against any revision, or compare two revisions
-- When comparing against history, `Cmd+S` never writes back because historical content is read-only
-- Git data is read through the system `git` command using only `rev-parse`, `log`, `show`, and `ls-files`; the repository is not modified
+- Historical revisions are always read-only. When comparing one against the working tree, `Cmd+S` can save only the working-tree file that holds a valid backend capability
+- Git reads disable repository hooks, fsmonitor, external diff, signature display, and unnecessary global configuration
+- Local branch switching is restricted: dirty worktrees are refused rather than forced, and repository content filters are not allowed to execute
 
 **Comparison history**
 
@@ -111,7 +112,7 @@ Requires Rust 1.75+ and Node 18+.
 
 ```bash
 # Dependencies
-cd app && npm install && cd ..
+cd app && npm ci && cd ..
 
 # Tests
 cargo test                # Rust
@@ -129,6 +130,17 @@ Releases are built by [.github/workflows/release.yml](.github/workflows/release.
 
 For development, run the app in two terminals: `cd app && npm run dev` and `cargo run -p litediff-app`.
 
+## Development Workflow
+
+LiteDiff uses a lightweight, repository-native Spec-Driven Development workflow. Before changing behavior, read:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) for setup, change levels, tests, and PR expectations
+- [docs/sdd/workflow.md](docs/sdd/workflow.md) for the L0-L3 process
+- [specs/product/litediff.md](specs/product/litediff.md) for the current product and safety baseline
+- [AGENTS.md](AGENTS.md) for the repository-wide automation rules
+
+Run the full quality gate with `bash scripts/verify.sh` on macOS/Linux/Git Bash, or `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1` on Windows.
+
 ## System Requirements
 
 - **macOS 11+** (Big Sur or later), with native builds for both Apple Silicon and Intel; installers are about 2.3 MB
@@ -137,12 +149,12 @@ For development, run the app in two terminals: `cd app && npm run dev` and `carg
 ## Architecture
 
 ```
-Svelte 5 frontend --IPC (full Session per request)--> Tauri v2 backend --> litediff-core
+Svelte 5 frontend --IPC (Session / SessionUpdate)--> Tauri v2 backend --> litediff-core
 ```
 
 **Three key decisions**
 
-- **Send the full session over IPC**: the frontend stays stateless, scrolling never waits for the backend, and virtualization remains entirely on the DOM side
+- **Send immutable session snapshots over IPC**: the initial result includes both documents, while option-only recomputes use `SessionUpdate` and omit unchanged source text
 - **Single scroll authority**: panels only report `scrollTop`; `App` stores one value and feeds it back to both panes so they stay pixel-aligned
 - **Collapse is a projection**: `buildDisplay()` projects hunks into display items. Display indexes and source-line indexes are separate coordinate systems, so every jump must go through that projection
 
@@ -161,5 +173,4 @@ The core Rust guarantee is **optimality validation**: a brute-force DP LCS imple
 |---|---|
 | In-place editing | Conflicts with virtual scrolling, which recycles focused DOM nodes |
 | Accept-change arrows | Require the in-place editing buffer model |
-| Collapse in inline view | Available in split view, but not yet wired into inline view |
 | Very large files | Whole-file comparison only; no chunked streaming yet |
