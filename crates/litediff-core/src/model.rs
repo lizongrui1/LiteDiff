@@ -197,6 +197,9 @@ pub struct DiffResult {
     pub rows: Vec<AlignedRow>,
     pub hunks: Vec<Hunk>,
     pub stats: DiffStats,
+    /// The line-level search hit its work budget and fell back to a coarse
+    /// replacement. The result is deterministic but not minimal.
+    pub approximate: bool,
 }
 
 impl DiffResult {

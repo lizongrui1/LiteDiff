@@ -28,8 +28,9 @@
 //! * Output is parsed from a delimiter-separated, `--no-pager` format so a user's
 //!   git config (colours, aliases, pager) cannot change the shape of the data.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Sentinel revision meaning "what is on disk right now".
 ///
@@ -80,6 +81,13 @@ pub struct GitBlob {
     pub label: String,
     /// Non-fatal notes, e.g. "not valid UTF-8".
     pub warnings: Vec<String>,
+    /// Preserve a UTF-8 BOM when a worktree file is later saved.
+    pub bom: bool,
+    /// The displayed text contains replacement characters.
+    pub lossy: bool,
+    /// Byte digest for a worktree read. Historical blobs have no save capability.
+    #[serde(skip)]
+    pub digest: Option<[u8; 32]>,
 }
 
 /// Field separator for machine-readable `git log` output.
@@ -87,18 +95,56 @@ pub struct GitBlob {
 /// A unit separator (0x1f) is used because it cannot occur in a commit subject or
 /// author name typed by a human, unlike `|`, tab, or comma.
 const FS: char = '\u{1f}';
+const MAX_GIT_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_GIT_STDERR_BYTES: usize = 1024 * 1024;
+
+#[cfg(unix)]
+const DISABLED_HOOKS_PATH: &str = "/dev/null";
+#[cfg(windows)]
+const DISABLED_HOOKS_PATH: &str = "NUL";
+#[cfg(not(any(unix, windows)))]
+const DISABLED_HOOKS_PATH: &str = "litediff-no-hooks";
+
+/// Build a git command with repository-controlled execution surfaces disabled.
+///
+/// Args are still passed as argv. The `-c` overrides matter because opening an
+/// untrusted repository is otherwise enough to run its fsmonitor command or
+/// checkout hooks. `switch_branch` additionally rejects smudge/process filters,
+/// which `-c` cannot neutralise safely without knowing every configured driver.
+fn git_command(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", DISABLED_HOOKS_PATH)
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C")
+        .arg("-C")
+        .arg(dir)
+        .arg("--no-pager")
+        .args(["-c", "core.fsmonitor=false"])
+        .args(["-c", "core.untrackedCache=false"])
+        .arg("-c")
+        .arg(format!("core.hooksPath={DISABLED_HOOKS_PATH}"))
+        .args(["-c", "diff.external="])
+        .args(["-c", "core.pager=cat"])
+        // A commit can embed a signature; without this, merely listing history
+        // invokes the repository-selected gpg.program on some Git versions.
+        .args(["-c", "log.showSignature=false"]);
+    command
+}
 
 /// Run a git command in `dir` and return raw stdout.
 ///
 /// stderr is surfaced verbatim: git's own message ("not a git repository",
 /// "unknown revision") is far more useful than a synthesised one.
 fn run(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .arg("--no-pager")
+    let mut child = git_command(dir)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 "找不到 git 命令，请先安装 Git".to_string()
@@ -107,8 +153,28 @@ fn run(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
             }
         })?;
 
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
+    let stdout = child.stdout.take().expect("piped git stdout");
+    let stderr = child.stderr.take().expect("piped git stderr");
+    let out_thread = std::thread::spawn(move || read_capped(stdout, MAX_GIT_OUTPUT_BYTES));
+    let err_thread = std::thread::spawn(move || read_capped(stderr, MAX_GIT_STDERR_BYTES));
+    let status = child
+        .wait()
+        .map_err(|error| format!("等待 git 失败：{error}"))?;
+    let (stdout, stdout_too_large) = out_thread
+        .join()
+        .map_err(|_| "读取 git 输出失败".to_string())?;
+    let (stderr, stderr_too_large) = err_thread
+        .join()
+        .map_err(|_| "读取 git 错误输出失败".to_string())?;
+    if stdout_too_large {
+        return Err("Git 输出超过 32 MiB 限制".to_string());
+    }
+    if stderr_too_large {
+        return Err("Git 错误输出过大".to_string());
+    }
+
+    if !status.success() {
+        let err = String::from_utf8_lossy(&stderr);
         let msg = err.trim();
         return Err(if msg.is_empty() {
             "git 命令失败（无错误输出）".to_string()
@@ -117,7 +183,15 @@ fn run(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         });
     }
 
-    Ok(output.stdout)
+    Ok(stdout)
+}
+
+fn read_capped(mut reader: impl Read, limit: usize) -> (Vec<u8>, bool) {
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024));
+    let mut limited = (&mut reader).take((limit + 1) as u64);
+    let _ = limited.read_to_end(&mut bytes);
+    let too_large = bytes.len() > limit;
+    (bytes, too_large)
 }
 
 /// Run a git command and return stdout as text, tolerating invalid UTF-8.
@@ -156,6 +230,28 @@ fn check_relative(file: &str) -> Result<(), String> {
         return Err(format!("路径不能跳出仓库：{file}"));
     }
     Ok(())
+}
+
+/// Resolve a worktree path and prove it is a regular file inside the repository.
+fn worktree_path(repo: &str, file: &str) -> Result<PathBuf, String> {
+    check_relative(file)?;
+    let root =
+        std::fs::canonicalize(repo).map_err(|error| format!("仓库路径无效：{repo}: {error}"))?;
+    let path = root.join(file);
+    let metadata =
+        std::fs::symlink_metadata(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("拒绝读取仓库内的符号链接：{file}"));
+    }
+    if !metadata.is_file() {
+        return Err(format!("不是普通文件：{file}"));
+    }
+    let canonical =
+        std::fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if !canonical.starts_with(&root) {
+        return Err(format!("路径跳出仓库：{file}"));
+    }
+    Ok(canonical)
 }
 
 /// One local branch.
@@ -396,20 +492,37 @@ pub fn show_file(repo: &str, rev: &str, file: &str) -> Result<GitBlob, String> {
                     text: String::new(),
                     label: format!("{} · {file}", &sha[..7]),
                     warnings: vec![format!("该版本中不存在此文件（{}）", &sha[..7])],
+                    bom: false,
+                    lossy: false,
+                    digest: None,
                 });
             }
             return Err(e);
         }
     };
+    if bytes.len() > crate::MAX_DOCUMENT_BYTES {
+        return Err(format!(
+            "该版本文件超过 {} MiB，无法在 LiteDiff 中打开",
+            crate::MAX_DOCUMENT_BYTES / (1024 * 1024)
+        ));
+    }
+    if line_count(&bytes) > crate::MAX_DOCUMENT_LINES {
+        return Err(format!(
+            "该版本文件超过 {} 行，无法在 LiteDiff 中打开",
+            crate::MAX_DOCUMENT_LINES
+        ));
+    }
 
+    let bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+    let body = if bom { &bytes[3..] } else { &bytes[..] };
     let mut warnings = Vec::new();
-    let text = match String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(e) => {
+    let (text, lossy) = match std::str::from_utf8(body) {
+        Ok(text) => (text.to_string(), false),
+        Err(_) => {
             // Binary blobs are common enough (icons, archives) that failing the
             // whole comparison would be worse than showing a lossy view of it.
             warnings.push("该文件不是 UTF-8 文本，已用替换字符显示".to_string());
-            String::from_utf8_lossy(e.as_bytes()).into_owned()
+            (String::from_utf8_lossy(body).into_owned(), true)
         }
     };
 
@@ -417,7 +530,18 @@ pub fn show_file(repo: &str, rev: &str, file: &str) -> Result<GitBlob, String> {
         text,
         label: format!("{} · {file}", &sha[..7]),
         warnings,
+        bom,
+        lossy,
+        digest: None,
     })
+}
+
+fn line_count(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let newlines = bytes.iter().filter(|byte| **byte == b'\n').count();
+    newlines + usize::from(!bytes.ends_with(b"\n"))
 }
 
 /// Read the working-tree file, bypassing git.
@@ -425,14 +549,15 @@ pub fn show_file(repo: &str, rev: &str, file: &str) -> Result<GitBlob, String> {
 /// Kept separate from [`show_file`] so "compare against what I have right now"
 /// never goes through a blob — the file may have uncommitted edits.
 pub fn worktree_file(repo: &str, file: &str) -> Result<GitBlob, String> {
-    check_relative(file)?;
-    let path = Path::new(repo).join(file);
-    let (text, warning) =
-        crate::read_text_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let path = worktree_path(repo, file)?;
+    let decoded = crate::read_text_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(GitBlob {
-        text,
+        text: decoded.text.to_string(),
         label: format!("工作区 · {file}"),
-        warnings: warning.into_iter().collect(),
+        warnings: decoded.warning.into_iter().collect(),
+        bom: decoded.bom,
+        lossy: decoded.lossy,
+        digest: Some(decoded.digest),
     })
 }
 
@@ -574,6 +699,8 @@ pub fn diff_files(repo: &str, left: &str, right: &str) -> Result<Vec<ChangedFile
         Path::new(repo),
         &[
             "diff",
+            "--no-ext-diff",
+            "--no-textconv",
             "--name-status",
             "-z",
             "--no-renames",
@@ -586,6 +713,8 @@ pub fn diff_files(repo: &str, left: &str, right: &str) -> Result<Vec<ChangedFile
         Path::new(repo),
         &[
             "diff",
+            "--no-ext-diff",
+            "--no-textconv",
             "--numstat",
             "-z",
             "--no-renames",
@@ -663,6 +792,7 @@ pub fn switch_branch(repo: &str, branch: &str) -> Result<RepoInfo, String> {
     if !dir.is_dir() {
         return Err(format!("仓库路径无效：{repo}"));
     }
+    reject_checkout_filters(dir)?;
 
     run(
         dir,
@@ -675,6 +805,41 @@ pub fn switch_branch(repo: &str, branch: &str) -> Result<RepoInfo, String> {
     // through a path-like name, or a worktree whose HEAD git rewrote, would
     // otherwise leave the panel showing a branch it is not on.
     resolve_repo(repo)
+}
+
+/// Refuse checkout when the repository configures content filters.
+///
+/// A smudge/process driver is an arbitrary program named by repository config.
+/// Git can disable hooks, but there is no single `-c` flag that disables every
+/// dynamically named filter. Refusal is the safe compatibility boundary: read-only
+/// history still works, while branch switching cannot execute repository code.
+fn reject_checkout_filters(dir: &Path) -> Result<(), String> {
+    let output = git_command(dir)
+        .args([
+            "config",
+            // Read the effective repository configuration, including include.path
+            // and config.worktree. `--local` misses both, while the hardened
+            // environment above has already disabled system/global config.
+            "--includes",
+            "--get-regexp",
+            r"^filter\..*\.(smudge|clean|process)$",
+        ])
+        .output()
+        .map_err(|error| format!("无法检查 Git filter 配置：{error}"))?;
+    if output.status.success() && !output.stdout.is_empty() {
+        return Err(
+            "该仓库配置了 Git content filter。为防止执行仓库中的命令，已禁止在此仓库切换分支；只读比较仍可使用"
+                .to_string(),
+        );
+    }
+    // `git config --get-regexp` exits 1 when there are no matches.
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(format!(
+            "无法检查 Git filter 配置：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -709,6 +874,36 @@ mod tests {
                 .args(args)
                 .output()
                 .expect("run git");
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).to_string()
+        }
+
+        fn run_with_input(&self, args: &[&str], input: &[u8]) -> String {
+            use std::io::Write as _;
+
+            let mut child = Command::new("git")
+                .arg("-C")
+                .arg(&self.dir)
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn git");
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(input)
+                .expect("write git stdin");
+            let out = child.wait_with_output().expect("wait for git");
             assert!(
                 out.status.success(),
                 "git {:?} failed: {}",
@@ -917,6 +1112,236 @@ mod tests {
         assert!(worktree_file(&repo.path(), "/etc/passwd").is_err());
         assert!(show_file(&repo.path(), "HEAD", "../a.txt").is_err());
         assert!(log_for_file(&repo.path(), "", 10).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tracked_symlink_cannot_make_the_worktree_reader_escape_the_repository() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TempRepo::new("worktree-symlink");
+        let outside = repo.dir.parent().unwrap().join(format!(
+            "litediff-outside-{}-{}.txt",
+            std::process::id(),
+            "worktree-symlink"
+        ));
+        std::fs::write(&outside, "secret outside repo\n").expect("outside");
+        symlink(&outside, repo.dir.join("link.txt")).expect("symlink");
+        repo.commit("tracked symlink");
+
+        let error = worktree_file(&repo.path(), "link.txt").expect_err("must be rejected");
+        assert!(error.contains("符号链接"), "{error}");
+        let _ = std::fs::remove_file(outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_fsmonitor_command_never_executes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempRepo::new("fsmonitor");
+        repo.write("a.txt", "a\n");
+        repo.commit("first");
+        let marker = repo.dir.join("fsmonitor-ran");
+        let monitor = repo.dir.join("fsmonitor.sh");
+        std::fs::write(
+            &monitor,
+            format!("#!/bin/sh\ntouch '{}'\nprintf '1\\n'\n", marker.display()),
+        )
+        .expect("script");
+        std::fs::set_permissions(&monitor, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        repo.run(&["config", "core.fsmonitor", monitor.to_str().unwrap()]);
+
+        let _ = list_files(&repo.path(), 100).expect("ls-files");
+        let _ = log_for_file(&repo.path(), "a.txt", 10).expect("log");
+        let _ = list_branches(&repo.path()).expect("branches");
+
+        assert!(
+            !marker.exists(),
+            "opening a repository must not execute its fsmonitor command"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_hooks_from_repository_config_never_execute() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempRepo::new("hooks");
+        repo.write("a.txt", "one\n");
+        repo.commit("first");
+        repo.run(&["branch", "feature"]);
+
+        let hooks = repo.dir.join("malicious-hooks");
+        std::fs::create_dir_all(&hooks).expect("hooks");
+        let marker = repo.dir.join("hook-ran");
+        let hook = hooks.join("post-checkout");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).expect("hook");
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        repo.run(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+
+        let info = switch_branch(&repo.path(), "feature").expect("safe switch");
+        assert_eq!(info.branch, "feature");
+        assert!(
+            !marker.exists(),
+            "repository-configured checkout hooks must not execute"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_with_content_filters_is_refused_without_running_them() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempRepo::new("filters");
+        repo.write("a.txt", "one\n");
+        repo.commit("first");
+        repo.run(&["branch", "feature"]);
+
+        let marker = repo.dir.join("filter-ran");
+        let filter = repo.dir.join("filter-ran.sh");
+        std::fs::write(
+            &filter,
+            format!("#!/bin/sh\ntouch '{}'\ncat\n", marker.display()),
+        )
+        .expect("filter script");
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        repo.run(&["config", "filter.evil.smudge", filter.to_str().unwrap()]);
+
+        let error = switch_branch(&repo.path(), "feature").expect_err("must refuse");
+        assert!(error.contains("content filter"), "{error}");
+        assert!(!marker.exists(), "the repository filter must not execute");
+        assert_eq!(
+            run_text(&repo.dir, &["branch", "--show-current"])
+                .expect("branch")
+                .trim(),
+            "main",
+            "refusal must not move HEAD"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_refuses_content_filters_from_an_included_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempRepo::new("filters-include");
+        repo.write("a.txt", "one\n");
+        repo.commit("first");
+        repo.run(&["branch", "feature"]);
+
+        let marker = repo.dir.join("included-filter-ran");
+        let filter = repo.dir.join("included-filter.sh");
+        std::fs::write(
+            &filter,
+            format!("#!/bin/sh\ntouch '{}'\ncat\n", marker.display()),
+        )
+        .expect("filter script");
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let included = repo.dir.join("included.gitconfig");
+        std::fs::write(
+            &included,
+            format!("[filter \"evil\"]\n\tsmudge = {}\n", filter.display()),
+        )
+        .expect("included config");
+        repo.run(&["config", "include.path", included.to_str().unwrap()]);
+
+        let error = switch_branch(&repo.path(), "feature").expect_err("must refuse");
+        assert!(error.contains("content filter"), "{error}");
+        assert!(!marker.exists(), "the included filter must not execute");
+        assert_eq!(
+            run_text(&repo.dir, &["branch", "--show-current"])
+                .expect("branch")
+                .trim(),
+            "main",
+            "refusal must not move HEAD"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_refuses_content_filters_from_worktree_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempRepo::new("filters-worktree");
+        repo.write("a.txt", "one\n");
+        repo.commit("first");
+        repo.run(&["branch", "feature"]);
+
+        let marker = repo.dir.join("worktree-filter-ran");
+        let filter = repo.dir.join("worktree-filter.sh");
+        std::fs::write(
+            &filter,
+            format!("#!/bin/sh\ntouch '{}'\ncat\n", marker.display()),
+        )
+        .expect("filter script");
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        repo.run(&["config", "extensions.worktreeConfig", "true"]);
+        repo.run(&[
+            "config",
+            "--worktree",
+            "filter.evil.smudge",
+            filter.to_str().unwrap(),
+        ]);
+
+        let error = switch_branch(&repo.path(), "feature").expect_err("must refuse");
+        assert!(error.contains("content filter"), "{error}");
+        assert!(!marker.exists(), "the worktree filter must not execute");
+        assert_eq!(
+            run_text(&repo.dir, &["branch", "--show-current"])
+                .expect("branch")
+                .trim(),
+            "main",
+            "refusal must not move HEAD"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_listing_does_not_invoke_the_repository_gpg_program() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempRepo::new("gpg");
+        repo.write("a.txt", "a\n");
+        repo.commit("first");
+
+        let marker = repo.dir.join("gpg-ran");
+        let gpg = repo.dir.join("fake-gpg.sh");
+        std::fs::write(
+            &gpg,
+            format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display()),
+        )
+        .expect("fake gpg");
+        std::fs::set_permissions(&gpg, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        repo.run(&["config", "log.showSignature", "true"]);
+        repo.run(&["config", "gpg.program", gpg.to_str().unwrap()]);
+
+        // Create a root commit with a syntactically valid gpgsig header. This lets
+        // the regression run without a real signing key.
+        let tree = repo.run(&["rev-parse", "HEAD^{tree}"]).trim().to_string();
+        let raw = format!(
+            "tree {tree}\n\
+             author Test <test@example.com> 1700000000 +0000\n\
+             committer Test <test@example.com> 1700000000 +0000\n\
+             gpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\
+             \n\
+             signed root\n"
+        );
+        let sha = repo
+            .run_with_input(
+                &["hash-object", "-t", "commit", "-w", "--stdin"],
+                raw.as_bytes(),
+            )
+            .trim()
+            .to_string();
+        repo.run(&["update-ref", "refs/heads/main", &sha]);
+
+        let commits = log_for_file(&repo.path(), "a.txt", 10).expect("log");
+        assert_eq!(commits[0].sha, sha, "the signed commit must be listed");
+        assert!(
+            !marker.exists(),
+            "listing history must not invoke the repository gpg.program"
+        );
     }
 
     #[test]

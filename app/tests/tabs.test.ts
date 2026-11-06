@@ -36,6 +36,7 @@ const session = (left: Side, right: Side): Session => ({
     rows: [],
     hunks: [],
     stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
+    approximate: false,
   },
   options: {
     ignore_whitespace: false,
@@ -45,6 +46,7 @@ const session = (left: Side, right: Side): Session => ({
     intra_line_max_tokens: 0,
   },
   warnings: [],
+  contentKey: "",
 });
 
 // --- identity ---------------------------------------------------------------

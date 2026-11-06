@@ -115,14 +115,14 @@
    * Display name for one side.
    *
    * A git side is named after its file, not after its path: a historical blob has
-   * no `path` (that is the guard against ⌘S writing it back), so keying the name
+   * no document token (the guard against ⌘S writing it back), so keying the name
    * off `path` alone labelled both panes "粘贴内容" — the one case where the name
    * matters most, because the two sides are the same file at two revisions.
    */
   function fileName(side: Side | undefined): string {
     if (!side) return $t("side.pasted");
     const source = side.path ?? side.git?.file ?? "";
-    if (!source) return $t("side.pasted");
+    if (!source) return side.label || $t("side.pasted");
     return source.split("/").pop() || source;
   }
 
@@ -136,7 +136,7 @@
   function fileTitle(side: Side | undefined): string {
     if (!side) return "";
     if (side.git) return `${side.git.short} · ${side.git.file}`;
-    return side.path ?? $t("side.pasted");
+    return side.path ?? side.label ?? $t("side.pasted");
   }
 
 </script>

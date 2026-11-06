@@ -56,6 +56,7 @@
     PasteBlock,
     PastePair,
     Session,
+    SessionUpdate,
     Side,
     SideName,
   } from "./lib/types";
@@ -81,8 +82,6 @@
     type SearchViewState,
   } from "./lib/search";
   import {
-    entryFromSession,
-    sessionFromEntry,
     sessionKey,
     shouldRecord,
     type HistorySummary,
@@ -169,6 +168,14 @@
   let historyEntries = $state<HistorySummary[]>([]);
   let historyLoading = $state(false);
   let historySeq = 0;
+  /**
+   * Fire-and-forget history writes still have to finish before "clear".
+   *
+   * Otherwise a save already in flight can complete after the clear and recreate
+   * one entry. New recordings are paused for the short clear window as well.
+   */
+  let historyClearInProgress = false;
+  const pendingHistorySaves = new Set<Promise<void>>();
 
   /**
    * Identity of the comparison most recently written to disk.
@@ -258,13 +265,25 @@
    */
   let draftLeft = $state("");
   let draftRight = $state("");
+  /** Set on input, avoiding a full-text comparison on every keystroke. */
+  let leftDraftDirty = $state(false);
+  let rightDraftDirty = $state(false);
   /** True while the split divider is being dragged, to show the resize cursor. */
   let dividerDragging = $state(false);
 
   const themeMode = $derived<ThemeMode>(settings.theme);
 
-  const leftLines = $derived(session ? splitLines(session.left.text) : []);
-  const rightLines = $derived(session ? splitLines(session.right.text) : []);
+  const splitCache = new WeakMap<Side, string[]>();
+  function cachedLines(side: Side): string[] {
+    const cached = splitCache.get(side);
+    if (cached) return cached;
+    const lines = splitLines(side.text);
+    splitCache.set(side, lines);
+    return lines;
+  }
+
+  const leftLines = $derived(session ? cachedLines(session.left) : []);
+  const rightLines = $derived(session ? cachedLines(session.right) : []);
 
   /*
    * Language, per side.
@@ -909,7 +928,15 @@
    * tab in place. So this replaces the active tab's session and leaves the others
    * alone — `openTab` is the entry point for "start something new".
    */
-  async function commit(promise: Promise<Session>): Promise<void> {
+  async function commit(
+    promise: Promise<Session>,
+    sessionId = activeId,
+    record = true,
+  ): Promise<void> {
+    if (!sessionId) {
+      status = $t("app.compareFailed");
+      return;
+    }
     busy = true;
     status = "";
     try {
@@ -929,7 +956,7 @@
        * here also means an option toggle reaches it — `sessionKey` then decides
        * that nothing new was compared and skips the write.
        */
-      recordHistory(next);
+      if (record) recordHistory(sessionId, next);
 
       /*
        * Fill the active tab in place.
@@ -944,8 +971,51 @@
        * away where the user was reading, and the row count is unchanged by "ignore
        * whitespace".
        */
-      const current = activeId;
-      tabs = tabs.map((tab) => (tab.id === current ? { ...tab, session: next } : tab));
+      tabs = tabs.map((tab) => (tab.id === sessionId ? { ...tab, session: next } : tab));
+    } catch (err) {
+      status = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  /**
+   * Apply a diff-only update while keeping the source text already on screen.
+   *
+   * A tab's backend id identifies the cached documents, so option changes and
+   * single-side loads cannot race with, or accidentally overwrite, another tab.
+   */
+  async function commitUpdate(
+    promise: Promise<SessionUpdate>,
+    sessionId = activeId,
+  ): Promise<void> {
+    if (!sessionId) {
+      status = $t("app.compareFailed");
+      return;
+    }
+    busy = true;
+    status = "";
+    try {
+      const update = await promise;
+      const current = tabs.find((tab) => tab.id === sessionId);
+      if (!current) return;
+      const next: Session = {
+        ...current.session,
+        result: update.result,
+        options: update.options,
+        warnings: update.warnings,
+        contentKey: update.contentKey,
+        left: update.left ?? current.session.left,
+        right: update.right ?? current.session.right,
+      };
+      if (!next.left || !next.right || !next.result) {
+        status = $t("app.compareFailed");
+        return;
+      }
+      navHunk = null;
+      if (next.warnings.length > 0) status = next.warnings.join(" · ");
+      recordHistory(sessionId, next);
+      tabs = tabs.map((tab) => (tab.id === sessionId ? { ...tab, session: next } : tab));
     } catch (err) {
       status = err instanceof Error ? err.message : String(err);
     } finally {
@@ -984,14 +1054,7 @@
     if (!tab) return;
     activeId = id;
     restoreView(tab);
-    /*
-     * Tell the backend which documents are now current.
-     *
-     * Tab switching is a frontend operation — the session is already in memory — but
-     * the backend caches its own copy for `rediff`. Skipping this makes the next
-     * option toggle silently re-diff the tab we just left.
-     */
-    void ipc.syncSession(tab.session.left, tab.session.right, tab.session.options);
+    // Each tab has its own backend session id, so switching is pointer-only.
   }
 
   /** Write the live scroll/fold state back onto the tab we are leaving. */
@@ -1023,6 +1086,7 @@
 
     const remaining = tabs.filter((tab) => tab.id !== id);
     tabs = remaining;
+    void ipc.dropSession(id);
     if (id !== activeId) return;
 
     /*
@@ -1050,7 +1114,6 @@
     const next = remaining[nextIndex];
     activeId = next.id;
     restoreView(next);
-    void ipc.syncSession(next.session.left, next.session.right, next.session.options);
   }
 
   /** Reorder tabs after a drag. */
@@ -1077,8 +1140,9 @@
    * most and awaiting it would put a filesystem round-trip in front of the diff
    * appearing on screen.
    */
-  function recordHistory(next: Session): void {
+  function recordHistory(sessionId: string, next: Session): void {
     if (settings.historyEnabled === false) return;
+    if (historyClearInProgress) return;
     if (!shouldRecord(next)) return;
 
     const key = sessionKey(next);
@@ -1088,9 +1152,8 @@
     if (key === lastSavedKey) return;
     lastSavedKey = key;
 
-    const entry = entryFromSession(next, Date.now());
-    void ipc
-      .historySave(entry)
+    const task: Promise<void> = ipc
+      .historySaveSession(sessionId, Date.now())
       .then(() => {
         // A successful save invalidates the rendered list, but only that: reloading
         // while the sheet is closed would be work nobody sees.
@@ -1106,7 +1169,11 @@
          * with a shorter list.
          */
         lastSavedKey = "";
+      })
+      .finally(() => {
+        pendingHistorySaves.delete(task);
       });
+    pendingHistorySaves.add(task);
   }
 
   /** Reload the history list, ignoring any response that is not the newest. */
@@ -1144,23 +1211,22 @@
   /**
    * Reopen a stored comparison as a new tab.
    *
-   * The texts go back through `set_both` rather than being diffed in the
-   * frontend: the result is not stored (it would go stale as soon as an ignore
-   * option changed), so the backend recomputes it exactly as it would for a
-   * fresh paste.
+   * The backend loads the snapshot directly into this tab's session and returns
+   * a fresh diff. The result is not stored, since it would go stale as soon as an
+   * ignore option changed.
    *
    * The sheet closes first — the point of picking an entry is to look at it.
    */
   async function openHistoryEntry(id: string): Promise<void> {
     try {
-      const entry = await ipc.historyLoad(id);
+      const sessionId = activeId;
+      if (!sessionId) return;
       historyOpen = false;
       closeSearch();
-      const restored = sessionFromEntry(entry);
-      // A recovered comparison is already on disk, so it is not re-recorded:
-      // reopening the same entry ten times must not create ten rows.
-      lastSavedKey = sessionKey(restored);
-      await commit(ipc.setBoth(restored.left, restored.right));
+      const restored = await ipc.historyRestore(sessionId, id);
+      // Reopening the same entry ten times must not create ten rows.
+      lastSavedKey = restored.contentKey || sessionKey(restored);
+      await commit(Promise.resolve(restored), sessionId, false);
     } catch (err) {
       status = err instanceof Error ? err.message : String(err);
     }
@@ -1176,12 +1242,16 @@
   }
 
   async function clearHistory(): Promise<void> {
+    historyClearInProgress = true;
     try {
+      await Promise.allSettled([...pendingHistorySaves]);
       await ipc.historyClear();
       // Every stored row is gone, so the next commit is a new comparison again.
       lastSavedKey = "";
     } catch (err) {
       status = err instanceof Error ? err.message : String(err);
+    } finally {
+      historyClearInProgress = false;
     }
     await refreshHistory();
   }
@@ -1196,7 +1266,14 @@
   async function readBlock(path: string): Promise<PasteBlock | null> {
     try {
       const loaded = await ipc.loadFile(path);
-      return { text: loaded.side.text, path: loaded.side.path, label: loaded.side.label };
+      return {
+        text: loaded.side.text,
+        path: loaded.side.path,
+        documentId: loaded.side.documentId ?? null,
+        bom: loaded.side.bom ?? false,
+        lossy: loaded.side.lossy ?? false,
+        label: loaded.side.label,
+      };
     } catch (err) {
       status = err instanceof Error ? err.message : String(err);
       return null;
@@ -1247,9 +1324,10 @@
    * the session non-empty, which unmounts the paste screen and would discard the
    * other block before it was ever sent.
    *
-   * A block that came from a file keeps its path, so `⌘S` writes back to the real
-   * file instead of refusing; a pasted block gets a label derived from its first
-   * line so the pane header says what is being compared.
+   * A block that came from a file keeps its backend-issued document token, so
+   * `⌘S` can write back to the real file instead of refusing; a pasted block gets
+   * a label derived from its first line so the pane header says what is being
+   * compared.
    */
   async function submitText(pair: PastePair): Promise<void> {
     closeSearch();
@@ -1257,13 +1335,18 @@
       path: block.path,
       label: block.path ? block.label : labelForText(block.text),
       text: block.text,
+      documentId: block.documentId ?? null,
+      bom: block.bom ?? false,
+      lossy: block.lossy ?? false,
     });
     // A new comparison has new row and column coordinates; never inherit the
     // previous document's reading position.
     scrollTop = 0;
     scrollLeft = 0;
     navHunk = null;
-    await commit(ipc.setBoth(toSide(pair.left), toSide(pair.right)));
+    const sessionId = activeId;
+    if (!sessionId) return;
+    await commit(ipc.setBoth(sessionId, toSide(pair.left), toSide(pair.right)), sessionId);
   }
 
   /** Short, human label for a pasted block. */
@@ -1276,26 +1359,29 @@
   }
 
   async function applyOptions(patch: OptionsPatch): Promise<void> {
-    await commit(ipc.rediff(patch));
+    const sessionId = activeId;
+    if (!sessionId) return;
+    await commitUpdate(ipc.rediff(sessionId, patch), sessionId);
   }
 
   /**
    * `⌘S`: write the edited buffer back to disk.
    *
-   * Both sides are saved when both have paths, because the diff is a single
-   * document-level action: leaving one pane dirty would make the next diff
-   * compare against a stale file.
+   * Both sides are saved when both have backend-issued document tokens, because
+   * the diff is a single document-level action: leaving one pane dirty would make
+   * the next diff compare against a stale file.
    *
-   * A side read from a git revision has no path, so it is filtered out here rather
-   * than special-cased: the guard against overwriting a historical blob with
-   * today's working copy is structural, not a flag this function has to remember
-   * to check.
+   * A side read from a git revision has no document token, so it is filtered out
+   * here rather than special-cased: the guard against overwriting a historical
+   * blob with today's working copy is structural, not a flag this function has to
+   * remember to check.
    */
   async function saveActive(): Promise<void> {
-    if (!session) return;
+    const sessionId = activeId;
+    if (!session || !sessionId) return;
 
     const targets = [session.left, session.right].filter(
-      (side): side is typeof side & { path: string } => side.path !== null,
+      (side): side is typeof side & { documentId: string } => Boolean(side.documentId),
     );
 
     if (targets.length === 0) {
@@ -1310,17 +1396,12 @@
     }
 
 
-    const saved: string[] = [];
-    for (const target of targets) {
-      try {
-        await ipc.saveFile(target.path, target.text);
-        saved.push(target.label);
-      } catch (err) {
-        status = `保存失败 ${target.label}：${err instanceof Error ? err.message : String(err)}`;
-        return;
-      }
+    try {
+      const saved = await ipc.saveCurrent(sessionId);
+      status = $t("app.saved", { names: saved.join(", ") });
+    } catch (err) {
+      status = `保存失败：${err instanceof Error ? err.message : String(err)}`;
     }
-    status = $t("app.saved", { names: saved.join(", ") });
   }
 
   /**
@@ -1351,7 +1432,9 @@
    */
   async function compareGit(left: GitSpec, right: GitSpec): Promise<void> {
     gitOpen = false;
-    await commit(ipc.gitCompare(left, right));
+    const sessionId = activeId;
+    if (!sessionId) return;
+    await commit(ipc.gitCompare(sessionId, left, right), sessionId);
   }
 
   /**
@@ -1382,7 +1465,7 @@
 
   /** True when a draft differs from what the session holds. */
   const draftDirty = $derived(
-    session !== null && (draftLeft !== session.left.text || draftRight !== session.right.text),
+    session !== null && (leftDraftDirty || rightDraftDirty),
   );
 
   function startEditing(): void {
@@ -1390,6 +1473,8 @@
     closeSearch();
     draftLeft = session.left.text;
     draftRight = session.right.text;
+    leftDraftDirty = false;
+    rightDraftDirty = false;
     editing = true;
   }
 
@@ -1398,6 +1483,8 @@
     editing = false;
     draftLeft = session?.left.text ?? "";
     draftRight = session?.right.text ?? "";
+    leftDraftDirty = false;
+    rightDraftDirty = false;
   }
 
   /**
@@ -1410,21 +1497,42 @@
    * file stay distinguishable once their text diverges.
    */
   async function applyEditing(): Promise<void> {
-    if (!session) return;
+    const sessionId = activeId;
+    if (!session || !sessionId) return;
 
     const toSide = (text: string, previous: Side): Side => ({
       path: previous.path,
       label: previous.git || previous.path ? previous.label : labelForText(text),
       text,
       git: previous.git ?? null,
+      documentId: previous.documentId ?? null,
+      bom: previous.bom ?? false,
+      lossy: previous.lossy ?? false,
     });
 
-    const next = ipc.setBoth(
-      toSide(draftLeft, session.left),
-      toSide(draftRight, session.right),
-    );
+    const leftChanged = draftLeft !== session.left.text;
+    const rightChanged = draftRight !== session.right.text;
+    if (!leftChanged && !rightChanged) {
+      editing = false;
+      return;
+    }
+    const next = ipc
+      .setDrafts(
+        sessionId,
+        leftChanged ? draftLeft : null,
+        rightChanged ? draftRight : null,
+      )
+      .then((update) => ({
+        ...update,
+        // These richer side objects stay local; only the changed text and diff
+        // result crossed IPC.
+        left: leftChanged ? toSide(draftLeft, session.left) : undefined,
+        right: rightChanged ? toSide(draftRight, session.right) : undefined,
+      }));
     editing = false;
-    await commit(next);
+    leftDraftDirty = false;
+    rightDraftDirty = false;
+    await commitUpdate(next, sessionId);
   }
 
   /** ⌘Enter inside edit mode commits rather than inserting a newline. */
@@ -1458,9 +1566,10 @@
    * as a block for later.
    */
   async function loadInto(side: SideName, path: string): Promise<void> {
+    const sessionId = activeId;
+    if (!sessionId) return;
     try {
-      const loaded = await ipc.loadFile(path);
-      await commit(ipc.setSide(side, loaded.side));
+      await commitUpdate(ipc.loadInto(sessionId, side, path), sessionId);
     } catch (err) {
       status = err instanceof Error ? err.message : String(err);
     }
@@ -2176,8 +2285,11 @@
             side="left"
             text={draftLeft}
             path={session.left.path}
-            dirty={draftLeft !== session.left.text}
-            onInput={(text) => (draftLeft = text)}
+            dirty={leftDraftDirty}
+            onInput={(text) => {
+              draftLeft = text;
+              leftDraftDirty = true;
+            }}
             onDone={() => void applyEditing()}
             onCancel={cancelEditing}
           />
@@ -2188,8 +2300,11 @@
             side="right"
             text={draftRight}
             path={session.right.path}
-            dirty={draftRight !== session.right.text}
-            onInput={(text) => (draftRight = text)}
+            dirty={rightDraftDirty}
+            onInput={(text) => {
+              draftRight = text;
+              rightDraftDirty = true;
+            }}
             onDone={() => void applyEditing()}
             onCancel={cancelEditing}
           />

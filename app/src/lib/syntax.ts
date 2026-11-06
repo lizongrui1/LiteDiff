@@ -584,6 +584,11 @@ export interface TokenSource {
   get(lineIndex: number | null): Token[];
 }
 
+const tokenSourceCache = new WeakMap<
+  readonly string[],
+  Map<Language, TokenSource | null>
+>();
+
 /**
  * Build a lazy token source for one side of a comparison.
  *
@@ -595,12 +600,22 @@ export function createTokenSource(
   lines: readonly string[],
   language: Language,
 ): TokenSource | null {
-  if (language === "plain" || lines.length === 0) return null;
+  let byLanguage = tokenSourceCache.get(lines);
+  if (!byLanguage) {
+    byLanguage = new Map();
+    tokenSourceCache.set(lines, byLanguage);
+  }
+  const cached = byLanguage.get(language);
+  if (cached !== undefined) return cached;
+  if (language === "plain" || lines.length === 0) {
+    byLanguage.set(language, null);
+    return null;
+  }
 
   const states = lineStates(lines, language);
   const memo = new Map<number, Token[]>();
 
-  return {
+  const source = {
     get(lineIndex: number | null): Token[] {
       if (lineIndex === null || lineIndex < 0 || lineIndex >= lines.length) return [];
       const cached = memo.get(lineIndex);
@@ -610,4 +625,6 @@ export function createTokenSource(
       return tokens;
     },
   };
+  byLanguage.set(language, source);
+  return source;
 }

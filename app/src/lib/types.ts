@@ -60,6 +60,8 @@ export interface DiffResult {
   rows: AlignedRow[];
   hunks: Hunk[];
   stats: DiffStats;
+  /** Search budget exhausted; the alignment is a coarse but deterministic fallback. */
+  approximate: boolean;
 }
 
 export interface DiffOptions {
@@ -92,6 +94,12 @@ export interface Side {
   text: string;
   /** Present when the text came from a git revision. */
   git?: GitOrigin | null;
+  /** Backend-issued save capability. Never synthesize this from a path. */
+  documentId?: string | null;
+  /** The file started with a UTF-8 BOM and must keep it on save. */
+  bom?: boolean;
+  /** Invalid UTF-8 was decoded lossily; the side is preview-only. */
+  lossy?: boolean;
 }
 
 /** One commit that touched a file. */
@@ -160,6 +168,18 @@ export interface Session {
   result: DiffResult;
   options: DiffOptions;
   warnings: string[];
+  /** Backend-computed document identity (options and diff result excluded). */
+  contentKey: string;
+}
+
+/** A backend diff update that omits unchanged source documents. */
+export interface SessionUpdate {
+  result: DiffResult;
+  options: DiffOptions;
+  warnings: string[];
+  contentKey: string;
+  left?: Side;
+  right?: Side;
 }
 
 /** Partial options sent from the UI. */
@@ -177,8 +197,12 @@ export interface LoadedSide {
 /** One pasted or imported block: the text plus where it came from, if anywhere. */
 export interface PasteBlock {
   text: string;
-  /** Absolute path when the block came from a file, so ⌘S can write it back. */
+  /** Display path when the block came from a file. */
   path: string | null;
+  /** Backend-issued save capability returned by `loadFile`. */
+  documentId?: string | null;
+  bom?: boolean;
+  lossy?: boolean;
   /** Display name; empty means "derive one from the first line". */
   label: string;
 }

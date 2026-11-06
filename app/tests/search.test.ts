@@ -4,6 +4,7 @@ import {
   findSearchHits,
   findTextMatches,
   groupSearchHits,
+  MAX_SEARCH_HITS,
   searchSlicesFor,
   splitDisplayIndexForHit,
   unifiedDisplayIndexForHit,
@@ -34,6 +35,14 @@ test("literal search is case-insensitive by default and supports case sensitivit
 test("search treats regular-expression characters as literal text", () => {
   assert.deepEqual(findTextMatches("a+b a.b a[b", "a."), [{ start: 4, end: 6 }]);
   assert.deepEqual(findTextMatches("a+b", "a+b"), [{ start: 0, end: 3 }]);
+});
+
+test("a single huge line stops allocating matches at the global cap", () => {
+  const text = "a".repeat(MAX_SEARCH_HITS + 1_000);
+  const hits = findSearchHits([row(0, 0, "equal")], [text], [text], "a");
+  assert.equal(hits.length, MAX_SEARCH_HITS);
+  assert.equal(hits.at(-1)?.start, MAX_SEARCH_HITS - 1);
+  assert.equal(findTextMatches(text, "a").length, MAX_SEARCH_HITS);
 });
 
 test("an equal row counts once and applies to both panes", () => {

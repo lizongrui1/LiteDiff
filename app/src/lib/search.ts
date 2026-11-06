@@ -33,6 +33,29 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Upper bound keeps a one-character query in a huge file from freezing the UI. */
+export const MAX_SEARCH_HITS = 50_000;
+
+function forEachMatch(
+  text: string,
+  pattern: RegExp,
+  limit: number,
+  visit: (start: number, end: number) => void,
+): void {
+  if (text.length === 0 || limit <= 0) return;
+  pattern.lastIndex = 0;
+  let count = 0;
+  let match: RegExpExecArray | null;
+  while (count < limit && (match = pattern.exec(text)) !== null) {
+    if (match[0].length === 0) {
+      pattern.lastIndex++;
+      continue;
+    }
+    count++;
+    visit(match.index, match.index + match[0].length);
+  }
+}
+
 /** Literal query matches, ordered by position. Empty queries match nothing. */
 export function findTextMatches(
   text: string,
@@ -42,10 +65,9 @@ export function findTextMatches(
   if (query.length === 0 || text.length === 0) return [];
   const pattern = new RegExp(escapeRegExp(query), caseSensitive ? "g" : "gi");
   const out: Array<{ start: number; end: number }> = [];
-  for (const match of text.matchAll(pattern)) {
-    if (match.index === undefined || match[0].length === 0) continue;
-    out.push({ start: match.index, end: match.index + match[0].length });
-  }
+  forEachMatch(text, pattern, MAX_SEARCH_HITS, (start, end) => {
+    out.push({ start, end });
+  });
   return out;
 }
 
@@ -66,6 +88,7 @@ export function findSearchHits(
   if (query.length === 0) return [];
 
   const out: SearchHit[] = [];
+  const pattern = new RegExp(escapeRegExp(query), caseSensitive ? "g" : "gi");
   for (let row = 0; row < rows.length; row++) {
     const item = rows[row];
     const leftLine = item.left;
@@ -74,21 +97,24 @@ export function findSearchHits(
     const rightText = rightLine === null ? "" : (rightLines[rightLine] ?? "");
 
     if (item.kind === "equal" && leftLine !== null && rightLine !== null && leftText === rightText) {
-      for (const match of findTextMatches(leftText, query, caseSensitive)) {
-        out.push({ row, side: "both", start: match.start, end: match.end, line: leftLine + 1 });
-      }
+      forEachMatch(leftText, pattern, MAX_SEARCH_HITS - out.length, (start, end) => {
+        out.push({ row, side: "both", start, end, line: leftLine + 1 });
+      });
+      if (out.length >= MAX_SEARCH_HITS) return out;
       continue;
     }
 
     if (leftLine !== null) {
-      for (const match of findTextMatches(leftText, query, caseSensitive)) {
-        out.push({ row, side: "left", start: match.start, end: match.end, line: leftLine + 1 });
-      }
+      forEachMatch(leftText, pattern, MAX_SEARCH_HITS - out.length, (start, end) => {
+        out.push({ row, side: "left", start, end, line: leftLine + 1 });
+      });
+      if (out.length >= MAX_SEARCH_HITS) return out;
     }
     if (rightLine !== null) {
-      for (const match of findTextMatches(rightText, query, caseSensitive)) {
-        out.push({ row, side: "right", start: match.start, end: match.end, line: rightLine + 1 });
-      }
+      forEachMatch(rightText, pattern, MAX_SEARCH_HITS - out.length, (start, end) => {
+        out.push({ row, side: "right", start, end, line: rightLine + 1 });
+      });
+      if (out.length >= MAX_SEARCH_HITS) return out;
     }
   }
   return out;

@@ -52,29 +52,64 @@ impl Frontiers {
 /// A region of work: left slice `[a_lo, a_hi)`, right slice `[b_lo, b_hi)`.
 type Region = (usize, usize, usize, usize);
 
+/// Matches plus whether the bounded search had to stop early.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchResult {
+    pub matches: Vec<(u32, u32)>,
+    pub exhausted: bool,
+}
+
 /// Compute matched `(left_index, right_index)` pairs between `a` and `b`.
 ///
 /// The result is ascending in both coordinates and describes a shortest edit
 /// script: `a.len() + b.len() - 2 * matches.len()` equals the edit distance
 /// (verified against a DP LCS oracle in the tests below).
 pub fn matches(a: &[u32], b: &[u32]) -> Vec<(u32, u32)> {
+    matches_with_budget(a, b, usize::MAX).matches
+}
+
+/// Compute matches while bounding work proportional to diagonal visits.
+///
+/// When the budget is exhausted the result deliberately contains no matches:
+/// returning a partial shortest-edit script would produce a misleading diff. The
+/// caller can then render a deterministic coarse replacement and label it
+/// approximate.
+pub fn matches_with_budget(a: &[u32], b: &[u32], budget: usize) -> MatchResult {
     if a.is_empty() || b.is_empty() {
-        return Vec::new();
+        return MatchResult {
+            matches: Vec::new(),
+            exhausted: false,
+        };
     }
 
     let mut frontiers = Frontiers::default();
     let mut out: Vec<(u32, u32)> = Vec::with_capacity(a.len().min(b.len()));
     let mut stack: Vec<Region> = vec![(0, a.len(), 0, b.len())];
+    let mut remaining = budget;
 
     while let Some((mut a_lo, mut a_hi, mut b_lo, mut b_hi)) = stack.pop() {
         // Peel the common prefix: those lines are unconditionally matched.
         while a_lo < a_hi && b_lo < b_hi && a[a_lo] == b[b_lo] {
+            if remaining == 0 {
+                return MatchResult {
+                    matches: Vec::new(),
+                    exhausted: true,
+                };
+            }
+            remaining -= 1;
             out.push((a_lo as u32, b_lo as u32));
             a_lo += 1;
             b_lo += 1;
         }
         // Peel the common suffix.
         while a_lo < a_hi && b_lo < b_hi && a[a_hi - 1] == b[b_hi - 1] {
+            if remaining == 0 {
+                return MatchResult {
+                    matches: Vec::new(),
+                    exhausted: true,
+                };
+            }
+            remaining -= 1;
             a_hi -= 1;
             b_hi -= 1;
             out.push((a_hi as u32, b_hi as u32));
@@ -85,21 +120,36 @@ pub fn matches(a: &[u32], b: &[u32]) -> Vec<(u32, u32)> {
             continue;
         }
 
-        match bisect(&a[a_lo..a_hi], &b[b_lo..b_hi], &mut frontiers) {
-            Some((x, y)) if !((x == 0 && y == 0) || (x == a_hi - a_lo && y == b_hi - b_lo)) => {
+        match bisect(
+            &a[a_lo..a_hi],
+            &b[b_lo..b_hi],
+            &mut frontiers,
+            &mut remaining,
+        ) {
+            Ok(Some((x, y))) if !((x == 0 && y == 0) || (x == a_hi - a_lo && y == b_hi - b_lo)) => {
                 stack.push((a_lo, a_lo + x, b_lo, b_lo + y));
                 stack.push((a_lo + x, a_hi, b_lo + y, b_hi));
             }
+            Ok(Some(_)) => debug_assert!(false, "bisect must return an interior split"),
             // Degenerate split: impossible after peeling (documented above), but
             // the region is still handled correctly as a full replacement.
-            _ => debug_assert!(false, "bisect must return an interior split"),
+            Ok(None) => debug_assert!(false, "bisect must return an interior split"),
+            Err(()) => {
+                return MatchResult {
+                    matches: Vec::new(),
+                    exhausted: true,
+                }
+            }
         }
     }
 
     // Regions are visited out of order by the stack; the model layer requires
     // ascending matches.
     out.sort_unstable();
-    out
+    MatchResult {
+        matches: out,
+        exhausted: false,
+    }
 }
 
 /// Find a point on an optimal edit path that splits the region into two parts.
@@ -111,7 +161,12 @@ pub fn matches(a: &[u32], b: &[u32]) -> Vec<(u32, u32)> {
 /// allocating the O(D^2) trace.
 ///
 /// `left` and `right` are non-empty and mismatch at both ends.
-fn bisect(left: &[u32], right: &[u32], frontiers: &mut Frontiers) -> Option<(usize, usize)> {
+fn bisect(
+    left: &[u32],
+    right: &[u32],
+    frontiers: &mut Frontiers,
+    remaining: &mut usize,
+) -> Result<Option<(usize, usize)>, ()> {
     let n = left.len() as isize;
     let m = right.len() as isize;
     let delta = n - m;
@@ -130,6 +185,10 @@ fn bisect(left: &[u32], right: &[u32], frontiers: &mut Frontiers) -> Option<(usi
         // ---- forward pass ---------------------------------------------------
         let mut k = -d + f_lo;
         while k <= d - f_hi {
+            if *remaining == 0 {
+                return Err(());
+            }
+            *remaining -= 1;
             let idx = off + k;
             // Arrive from `k+1` (a deletion: x unchanged) or `k-1` (an insertion:
             // x+1). A neighbour still at -1 is unreachable and must not win.
@@ -159,7 +218,7 @@ fn bisect(left: &[u32], right: &[u32], frontiers: &mut Frontiers) -> Option<(usi
                 if jdx >= 0 && jdx < v_len && vb[jdx as usize] != -1 {
                     // The backward frontier is in reversed coordinates.
                     if x >= n - vb[jdx as usize] {
-                        return Some((x as usize, y as usize));
+                        return Ok(Some((x as usize, y as usize)));
                     }
                 }
             }
@@ -169,6 +228,10 @@ fn bisect(left: &[u32], right: &[u32], frontiers: &mut Frontiers) -> Option<(usi
         // ---- backward pass ---------------------------------------------------
         let mut k = -d + b_lo;
         while k <= d - b_hi {
+            if *remaining == 0 {
+                return Err(());
+            }
+            *remaining -= 1;
             let idx = off + k;
             let mut x = if k == -d || (k != d && vb[(idx - 1) as usize] < vb[(idx + 1) as usize]) {
                 vb[(idx + 1) as usize]
@@ -204,7 +267,7 @@ fn bisect(left: &[u32], right: &[u32], frontiers: &mut Frontiers) -> Option<(usi
                     if fx + x >= n {
                         // Mirror the forward extent onto its own diagonal.
                         let fy = fx - (delta - k);
-                        return Some((fx as usize, fy as usize));
+                        return Ok(Some((fx as usize, fy as usize)));
                     }
                 }
             }
@@ -212,7 +275,7 @@ fn bisect(left: &[u32], right: &[u32], frontiers: &mut Frontiers) -> Option<(usi
         }
     }
 
-    None
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -273,6 +336,28 @@ mod tests {
     fn complete_replacement_has_no_matches() {
         let got = check(&[1, 2, 3], &[4, 5]);
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn exhausted_budget_returns_no_partial_match_script() {
+        let a: Vec<u32> = (0..100).collect();
+        let b: Vec<u32> = (100..200).rev().collect();
+        let result = matches_with_budget(&a, &b, 8);
+        assert!(result.exhausted);
+        assert!(
+            result.matches.is_empty(),
+            "a partial match list would be an invalid shortest-edit script"
+        );
+    }
+
+    #[test]
+    fn a_generous_budget_preserves_the_exact_result() {
+        let a = [1, 2, 3, 4];
+        let b = [1, 9, 3, 4, 5];
+        let exact = matches(&a, &b);
+        let bounded = matches_with_budget(&a, &b, 10_000);
+        assert!(!bounded.exhausted);
+        assert_eq!(bounded.matches, exact);
     }
 
     #[test]

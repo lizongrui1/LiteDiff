@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "LiteDiff reads files only through its own commands; the single plugin permission is the native open dialog, which returns a path and nothing more.",
+  "description": "LiteDiff's backend exposes only its own commands. Native pickers are invoked there so returned paths become explicit user-approved capabilities, and the renderer has no direct dialog-plugin access.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default"]
 }

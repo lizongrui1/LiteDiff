@@ -46,8 +46,8 @@ export interface HistorySummary {
 export interface HistoryEntry {
   id: string;
   createdAt: number;
-  left: { label: string; path: string | null; text: string };
-  right: { label: string; path: string | null; text: string };
+  left: { label: string; path: string | null; text: string; bom?: boolean; lossy?: boolean };
+  right: { label: string; path: string | null; text: string; bom?: boolean; lossy?: boolean };
   options: {
     ignoreWhitespace: boolean;
     ignoreAllWhitespace: boolean;
@@ -87,6 +87,7 @@ export function shouldRecord(session: Session): boolean {
  * option toggle is noise.
  */
 export function sessionKey(session: Session): string {
+  if (session.contentKey) return session.contentKey;
   const side = (s: Session["left"]): string =>
     `${s.path ?? ""}\u0000${s.text.length}\u0000${s.text}`;
   return `${side(session.left)}\u0001${side(session.right)}`;
@@ -155,8 +156,20 @@ export function entryFromSession(
   return {
     id,
     createdAt,
-    left: { label: session.left.label, path: session.left.path, text: session.left.text },
-    right: { label: session.right.label, path: session.right.path, text: session.right.text },
+    left: {
+      label: session.left.label,
+      path: session.left.path,
+      text: session.left.text,
+      bom: session.left.bom ?? false,
+      lossy: session.left.lossy ?? false,
+    },
+    right: {
+      label: session.right.label,
+      path: session.right.path,
+      text: session.right.text,
+      bom: session.right.bom ?? false,
+      lossy: session.right.lossy ?? false,
+    },
     options: {
       ignoreWhitespace: session.options.ignore_whitespace,
       ignoreAllWhitespace: session.options.ignore_all_whitespace,
@@ -175,12 +188,25 @@ export function entryFromSession(
  */
 export function sessionFromEntry(entry: HistoryEntry): Session {
   return {
-    left: { path: entry.left.path, label: entry.left.label, text: entry.left.text, git: null },
+    left: {
+      // A history snapshot is not proof that the current file still has these
+      // bytes. Without a backend document token it must remain read-only.
+      path: null,
+      label: entry.left.label,
+      text: entry.left.text,
+      git: null,
+      documentId: null,
+      bom: entry.left.bom ?? false,
+      lossy: entry.left.lossy ?? false,
+    },
     right: {
-      path: entry.right.path,
+      path: null,
       label: entry.right.label,
       text: entry.right.text,
       git: null,
+      documentId: null,
+      bom: entry.right.bom ?? false,
+      lossy: entry.right.lossy ?? false,
     },
     result: {
       left_line_count: 0,
@@ -188,6 +214,7 @@ export function sessionFromEntry(entry: HistoryEntry): Session {
       rows: [],
       hunks: [],
       stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
+      approximate: false,
     },
     options: {
       ignore_whitespace: entry.options.ignoreWhitespace,
@@ -197,5 +224,6 @@ export function sessionFromEntry(entry: HistoryEntry): Session {
       intra_line_max_tokens: 0,
     },
     warnings: [],
+    contentKey: "",
   };
 }

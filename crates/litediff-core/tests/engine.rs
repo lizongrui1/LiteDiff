@@ -317,6 +317,10 @@ fn large_file_diff_is_fast_and_correct() {
     assert_eq!(result.stats.modified, 50, "exactly 50 changed lines");
     assert!(!result.is_identical());
     assert!(
+        !result.approximate,
+        "the normal 20k-line/50-edit case must stay exact"
+    );
+    assert!(
         elapsed < std::time::Duration::from_secs(5),
         "diff took {elapsed:?}, too slow for the cold-start target"
     );

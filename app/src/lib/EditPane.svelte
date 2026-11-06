@@ -37,6 +37,20 @@
 
   let { side, text, path, dirty, onInput, onDone, onCancel }: Props = $props();
 
+  function countLines(value: string): number {
+    if (value === "") return 0;
+    return value.split("\n").length - (value.endsWith("\n") ? 1 : 0);
+  }
+
+  let lineCount = $state(0);
+  $effect(() => {
+    const latest = text;
+    const timer = setTimeout(() => {
+      lineCount = countLines(latest);
+    }, 120);
+    return () => clearTimeout(timer);
+  });
+
   /**
    * Keyboard handling lives on the textarea, not on a wrapping element.
    *
@@ -73,7 +87,7 @@
     {#if dirty}
       <span class="dirty">{$t("edit.dirty")}</span>
     {/if}
-    <span class="lines">{$t("edit.lines", { n: text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0) })}</span>
+    <span class="lines">{$t("edit.lines", { n: lineCount })}</span>
   </div>
 
   <textarea

@@ -4,6 +4,8 @@
 //! later overwrite exactly one line without re-serialising the document, and a
 //! save (`Cmd + S`) writes back the buffer it read.
 
+use std::sync::Arc;
+
 /// One line: `text[start..end]` is the line content *without* its terminator.
 ///
 /// Line endings are normalised away at this layer: both `\n` and `\r\n`
@@ -19,15 +21,27 @@ pub struct Line {
 /// An immutable document plus its line index.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceText {
-    text: String,
+    text: Arc<str>,
     lines: Vec<Line>,
 }
 
 impl SourceText {
     pub fn new(text: impl Into<String>) -> Self {
-        let text = text.into();
+        Self::from_shared(Arc::from(text.into()))
+    }
+
+    /// Build an index that shares an existing immutable buffer.
+    ///
+    /// The desktop app keeps the same text in the UI-facing side and in this
+    /// index. Sharing the allocation avoids copying a multi-megabyte document on
+    /// every command and lets session snapshots be cheap.
+    pub fn from_shared(text: Arc<str>) -> Self {
         let lines = split_lines(&text);
         Self { text, lines }
+    }
+
+    pub fn shared_text(&self) -> Arc<str> {
+        Arc::clone(&self.text)
     }
 
     pub fn text(&self) -> &str {

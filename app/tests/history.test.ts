@@ -38,6 +38,7 @@ const session = (left: Side, right: Side, over: Partial<Session> = {}): Session 
     rows: [],
     hunks: [],
     stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
+    approximate: false,
   },
   options: {
     ignore_whitespace: false,
@@ -47,6 +48,7 @@ const session = (left: Side, right: Side, over: Partial<Session> = {}): Session 
     intra_line_max_tokens: 0,
   },
   warnings: [],
+  contentKey: "",
   ...over,
 });
 
@@ -169,9 +171,20 @@ test("a session survives a save/restore round trip", () => {
   const restored = sessionFromEntry(entry);
   assert.equal(restored.left.text, original.left.text);
   assert.equal(restored.right.text, original.right.text);
-  assert.equal(restored.left.path, "/p/a.go");
+  assert.equal(restored.left.path, null, "history is not a save capability");
   assert.equal(restored.right.path, null, "a pasted side stays path-less");
   assert.equal(restored.options.ignore_case, true);
+});
+
+test("a backend content key avoids hashing both documents in the renderer", () => {
+  const first = session(side({ text: "a" }), side({ text: "b" }), {
+    contentKey: "backend-key",
+  });
+  const second = session(side({ text: "different" }), side({ text: "also different" }), {
+    contentKey: "backend-key",
+  });
+  assert.equal(sessionKey(first), "backend-key");
+  assert.equal(sessionKey(first), sessionKey(second));
 });
 
 test("a restored session carries no diff result and no git origin", () => {

@@ -173,7 +173,7 @@ fn changed_ranges(
 
     let a: Vec<u32> = left_tokens.iter().map(|t| t.id).collect();
     let b: Vec<u32> = right_tokens.iter().map(|t| t.id).collect();
-    let matched = myers::matches(&a, &b);
+    let matched = myers::matches_with_budget(&a, &b, 5_000_000).matches;
 
     let left_ranges = unmatched_byte_ranges(&left_tokens, matched.iter().map(|&(i, _)| i as usize));
     let right_ranges =

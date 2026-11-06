@@ -11,13 +11,13 @@ import type {
   BranchInfo,
   ChangedFile,
   CommitInfo,
-  DiffOptions,
   GitSpec,
   LoadedSide,
   OptionsPatch,
   RepoInfo,
   RepoStatus,
   Session,
+  SessionUpdate,
   Side,
 } from "./types";
 import type { HistoryEntry, HistorySummary } from "./history";
@@ -69,10 +69,13 @@ export function loadFile(path: string): Promise<LoadedSide> {
 }
 
 /** Commit one side and receive a fresh diff. */
-export function setSide(side: "left" | "right", sideData: Side): Promise<Session> {
-  return call<Session>("set_side", { side, sideData });
+export function setSide(
+  sessionId: string,
+  side: "left" | "right",
+  sideData: Side,
+): Promise<Session> {
+  return call<Session>("set_side", { sessionId, side, sideData });
 }
-
 
 /**
  * Commit both sides at once and receive a fresh diff.
@@ -81,51 +84,56 @@ export function setSide(side: "left" | "right", sideData: Side): Promise<Session
  * produce an intermediate session with only one side filled, which is enough to
  * unmount that screen mid-commit.
  */
-export function setBoth(left: Side, right: Side): Promise<Session> {
-  return call<Session>("set_both", { left, right });
+export function setBoth(sessionId: string, left: Side, right: Side): Promise<Session> {
+  return call<Session>("set_both", { sessionId, left, right });
 }
 /** Re-diff, optionally changing options first. */
-export function rediff(patch?: OptionsPatch): Promise<Session> {
-  return call<Session>("rediff", { patch: patch ?? null });
+export function rediff(sessionId: string, patch?: OptionsPatch): Promise<SessionUpdate> {
+  return call<SessionUpdate>("rediff", { sessionId, patch: patch ?? null });
 }
 
+/** Send only the editor sides whose text actually changed. */
+export function setDrafts(
+  sessionId: string,
+  left: string | null,
+  right: string | null,
+): Promise<SessionUpdate> {
+  return call<SessionUpdate>("set_drafts", { sessionId, left, right });
+}
 
 /**
  * Open the native file picker and return the chosen path, or null if cancelled.
  *
- * Goes through the dialog plugin rather than an `<input type="file">`: a web file
+ * Goes through a backend command rather than an `<input type="file">`: a web file
  * input hands back a `File` with no filesystem path, which the backend cannot
- * read, and it cannot show hidden files or respect the macOS sidebar.
+ * read. The backend also records the picker result as an approved path, which is
+ * what allows a later load without trusting a renderer-supplied path.
  */
-export async function pickFile(title: string): Promise<string | null> {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({
-    multiple: false,
-    directory: false,
-    title,
-  });
-  return typeof selected === "string" ? selected : null;
+export function pickFile(title: string): Promise<string | null> {
+  return call<string | null>("pick_file", { title });
 }
-/**
- * Adopt a tab's documents and options in the backend, without a diff.
- *
- * Called when switching tabs. The session is already in memory on this side, so
- * this is not about getting a result — it is about making the backend's document
- * cache agree with the tab that is now on screen, which is what the next `rediff`
- * will run against.
- */
-export function syncSession(left: Side, right: Side, options: DiffOptions): Promise<void> {
-  return call<void>("sync_session", { left, right, options });
-}
-
 /** Reset both sides and options. */
-export function clearSession(): Promise<Session> {
-  return call<Session>("clear");
+export function clearSession(sessionId: string): Promise<Session> {
+  return call<Session>("clear", { sessionId });
 }
 
-/** Write an edited buffer back to disk. */
-export function saveFile(path: string, text: string): Promise<void> {
-  return call<void>("save_file", { path, text });
+/** Read a file directly into one side of an existing session. */
+export function loadInto(
+  sessionId: string,
+  side: "left" | "right",
+  path: string,
+): Promise<SessionUpdate> {
+  return call<SessionUpdate>("load_into", { sessionId, side, path });
+}
+
+/** Save the backend's copy of a session and return saved display labels. */
+export function saveCurrent(sessionId: string): Promise<string[]> {
+  return call<string[]>("save_current", { sessionId });
+}
+
+/** Release a closed tab's backend cache. */
+export function dropSession(sessionId: string): Promise<void> {
+  return call<void>("drop_session", { sessionId });
 }
 
 /** Result of inspecting a dropped path. */
@@ -161,8 +169,12 @@ export function gitLog(repo: string, file: string, limit = 200): Promise<CommitI
   return call<CommitInfo[]>("git_log", { repo, file, limit });
 }
 /** Compare two git revisions and receive a fresh diff. */
-export function gitCompare(left: GitSpec, right: GitSpec): Promise<Session> {
-  return call<Session>("git_compare", { left, right });
+export function gitCompare(
+  sessionId: string,
+  left: GitSpec,
+  right: GitSpec,
+): Promise<Session> {
+  return call<Session>("git_compare", { sessionId, left, right });
 }
 
 /** List the repository's local branches, current one first. */
@@ -193,14 +205,8 @@ export function gitSwitchBranch(repo: string, branch: string): Promise<RepoInfo>
  * otherwise: a repository is a directory, and opening a *folder* is the gesture
  * users expect when they mean "add this project".
  */
-export async function pickFolder(title: string): Promise<string | null> {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({
-    multiple: false,
-    directory: true,
-    title,
-  });
-  return typeof selected === "string" ? selected : null;
+export function pickFolder(title: string): Promise<string | null> {
+  return call<string | null>("pick_folder", { title });
 }
 
 /**
@@ -219,9 +225,9 @@ export async function pickFolderDev(title: string): Promise<string | null> {
 
 // --- history ---------------------------------------------------------------
 
-/** Save one comparison; returns its id, or null when it was too large to keep. */
-export function historySave(entry: HistoryEntry): Promise<string | null> {
-  return call<string | null>("history_save", { entry });
+/** Save the backend's cached comparison; no document text crosses IPC. */
+export function historySaveSession(sessionId: string, createdAt: number): Promise<string | null> {
+  return call<string | null>("history_save_session", { sessionId, createdAt });
 }
 
 /** List stored comparisons, newest first, without their document texts. */
@@ -232,6 +238,11 @@ export function historyList(): Promise<HistorySummary[]> {
 /** Read one stored comparison in full. */
 export function historyLoad(id: string): Promise<HistoryEntry> {
   return call<HistoryEntry>("history_load", { id });
+}
+
+/** Restore a history snapshot directly into a session on the backend. */
+export function historyRestore(sessionId: string, id: string): Promise<Session> {
+  return call<Session>("history_restore", { sessionId, id });
 }
 
 /** Delete one stored comparison. */

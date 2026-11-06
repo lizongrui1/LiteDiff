@@ -39,6 +39,12 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# The version is written into JSON and artifact names. Treat it as data with one
+# strict shape rather than allowing arbitrary PowerShell/metacharacter input.
+if ($Version -ne "" -and $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    throw "Invalid semantic version: $Version"
+}
+
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $AppDir = Join-Path $Root "app"
 $OutDir = Join-Path $Root "dist-windows"
@@ -64,8 +70,8 @@ Step "Installing frontend dependencies"
 Push-Location $AppDir
 try {
     if (-not (Test-Path "node_modules")) {
-        npm install
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
     }
 
     if (-not $SkipTests) {
@@ -112,8 +118,8 @@ if (-not (Test-Path $TauriCli)) {
     Step "Installing Tauri CLI"
     Push-Location $AppDir
     try {
-        npm install
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
     }
     finally { Pop-Location }
 }

@@ -13,8 +13,8 @@
 //!
 //! Appending to a single JSON array would mean rewriting the whole file on every
 //! comparison, and a crash mid-write would corrupt the entire history. One file per
-//! entry means a write is atomic (temp + rename, as with `save_file`), pruning is a
-//! directory scan, and a corrupt entry costs exactly that entry.
+//! entry means a write is atomic (temp + rename, as with `write_text_file`),
+//! pruning is a directory scan, and a corrupt entry costs exactly that entry.
 //!
 //! The directory holds:
 //!
@@ -27,8 +27,23 @@
 //! comparisons in the same millisecond cannot collide.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
+
+/// Serialises every history mutation within this process.
+///
+/// `new_id` checks for an existing file before writing it, so two same-millisecond
+/// saves could otherwise choose the same name. Locking the whole save also keeps a
+/// body and its summary from being observed between writes, while delete, clear,
+/// and prune must not race an in-flight save.
+static HISTORY_LOCK: Mutex<()> = Mutex::new(());
+
+fn history_lock() -> MutexGuard<'static, ()> {
+    HISTORY_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// One recorded comparison.
 ///
@@ -59,10 +74,17 @@ pub struct HistoryEntry {
 pub struct HistorySide {
     /// Display name: a filename, or a label derived from pasted text.
     pub label: String,
-    /// Absolute path when the side came from disk, so `⌘S` still works.
+    /// Absolute path recorded for context. Restoring a snapshot never grants a
+    /// save capability; only a live backend-issued document token can do that.
     pub path: Option<String>,
     /// Full text. This is the bulk of the file.
     pub text: String,
+    /// Preserve a UTF-8 BOM if this snapshot is ever exported.
+    #[serde(default)]
+    pub bom: bool,
+    /// Invalid UTF-8 snapshots are display-only.
+    #[serde(default)]
+    pub lossy: bool,
 }
 
 /// Diff options captured with an entry.
@@ -80,7 +102,7 @@ pub struct HistoryOptions {
 }
 
 /// Lightweight summary for the list, without the document texts.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistorySummary {
     pub id: String,
@@ -125,12 +147,7 @@ fn history_dir(root: &Path) -> PathBuf {
 fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
     let parent = path.parent().ok_or("history: path has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    let tmp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("entry")
-    ));
-    std::fs::write(&tmp, body).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    crate::write_text_file(path, body).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Save one entry, returning its id.
@@ -146,18 +163,22 @@ pub fn save(root: &Path, mut entry: HistoryEntry) -> Result<Option<String>, Stri
     if bytes > MAX_ENTRY_BYTES {
         return Ok(None);
     }
+    let _guard = history_lock();
+    let dir = history_dir(root);
     if entry.id.is_empty() {
-        entry.id = new_id(entry.created_at);
+        entry.id = new_id(entry.created_at, &dir);
     }
     // Sanitise the id before it becomes a filename: the value arrives from the
     // frontend, and a `/` or `..` would let it escape the history directory.
     let safe = sanitize_id(&entry.id)?;
-    let dir = history_dir(root);
     let body = serde_json::to_string(&entry).map_err(|e| format!("history: {e}"))?;
     if body.len() > MAX_ENTRY_BYTES {
         return Ok(None);
     }
     write_atomic(&dir.join(format!("{safe}.json")), &body)?;
+    let summary = serde_json::to_string(&HistorySummary::from(&entry))
+        .map_err(|error| format!("history summary: {error}"))?;
+    write_atomic(&dir.join(format!("{safe}.meta.json")), &summary)?;
     Ok(Some(entry.id))
 }
 
@@ -176,10 +197,21 @@ fn sanitize_id(id: &str) -> Result<String, String> {
 }
 
 /// A sortable, collision-free id from a timestamp.
-fn new_id(created_at: i64) -> String {
-    // Zero-padding keeps lexical order equal to chronological order, so the
-    // directory listing is already sorted.
-    format!("{created_at:013}")
+fn new_id(created_at: i64, dir: &Path) -> String {
+    // Zero-padding keeps lexical order equal to chronological order. A suffix
+    // handles two comparisons created in the same millisecond without overwriting
+    // the first entry.
+    for suffix in 0..10_000 {
+        let id = if suffix == 0 {
+            format!("{created_at:013}")
+        } else {
+            format!("{created_at:013}-{suffix:04}")
+        };
+        if !dir.join(format!("{id}.json")).exists() {
+            return id;
+        }
+    }
+    format!("{created_at:013}-overflow")
 }
 
 /// List every entry, newest first, without their document texts.
@@ -187,6 +219,11 @@ fn new_id(created_at: i64) -> String {
 /// Unreadable or malformed files are skipped rather than failing the call: one
 /// corrupt entry must not hide the rest of the history.
 pub fn list(root: &Path) -> Result<Vec<HistorySummary>, String> {
+    let _guard = history_lock();
+    list_unlocked(root)
+}
+
+fn list_unlocked(root: &Path) -> Result<Vec<HistorySummary>, String> {
     let dir = history_dir(root);
     let entries = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
@@ -198,16 +235,49 @@ pub fn list(root: &Path) -> Result<Vec<HistorySummary>, String> {
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if path.extension().and_then(|e| e.to_str()) != Some("json") || name.ends_with(".meta.json")
+        {
             continue;
         }
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
+        if sanitize_id(stem).is_err() || !is_regular_file(&path) {
+            continue;
+        }
+        let meta_path = dir.join(format!("{stem}.meta.json"));
+        if is_regular_file(&meta_path) {
+            if let Ok(meta) = std::fs::read_to_string(&meta_path) {
+                if let Ok(summary) = serde_json::from_str::<HistorySummary>(&meta) {
+                    if summary.id == stem {
+                        out.push(summary);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Backward compatibility: entries written before sidecars existed still
+        // list correctly, and the first listing creates their sidecar.
         let Ok(body) = std::fs::read_to_string(&path) else {
             continue;
         };
         let Ok(parsed) = serde_json::from_str::<HistoryEntry>(&body) else {
             continue;
         };
-        out.push(HistorySummary::from(&parsed));
+        if parsed.id != stem {
+            continue;
+        }
+        let summary = HistorySummary::from(&parsed);
+        if let Ok(meta) = serde_json::to_string(&summary) {
+            let _ = write_atomic(&meta_path, &meta);
+        }
+        out.push(summary);
     }
 
     // Newest first. Timestamps can tie; the id breaks it deterministically.
@@ -219,24 +289,46 @@ pub fn list(root: &Path) -> Result<Vec<HistorySummary>, String> {
     Ok(out)
 }
 
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
 /// Read one entry in full.
 pub fn load(root: &Path, id: &str) -> Result<HistoryEntry, String> {
+    let _guard = history_lock();
     let safe = sanitize_id(id)?;
     let path = history_dir(root).join(format!("{safe}.json"));
+    if !is_regular_file(&path) {
+        return Err(format!("历史记录不存在或不是普通文件：{}", path.display()));
+    }
     let body = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    serde_json::from_str(&body).map_err(|e| format!("{}: {e}", path.display()))
+    let entry: HistoryEntry =
+        serde_json::from_str(&body).map_err(|e| format!("{}: {e}", path.display()))?;
+    if entry.id != safe {
+        return Err(format!("历史记录标识与文件名不一致：{}", path.display()));
+    }
+    Ok(entry)
 }
 
 /// Delete one entry.
 pub fn delete(root: &Path, id: &str) -> Result<(), String> {
+    let _guard = history_lock();
+    delete_unlocked(root, id)
+}
+
+fn delete_unlocked(root: &Path, id: &str) -> Result<(), String> {
     let safe = sanitize_id(id)?;
-    let path = history_dir(root).join(format!("{safe}.json"));
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        // Already gone is success: the caller wanted it absent.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("{}: {e}", path.display())),
+    let dir = history_dir(root);
+    for suffix in [".json", ".meta.json"] {
+        let path = dir.join(format!("{safe}{suffix}"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{}: {error}", path.display())),
+        }
     }
+    Ok(())
 }
 
 /// Remove entries older than `days` and cap the remaining count.
@@ -251,7 +343,8 @@ pub fn prune(root: &Path, days: i64, keep: usize, now_ms: i64) -> Result<usize, 
         return Ok(0);
     }
 
-    let mut entries = list(root)?;
+    let _guard = history_lock();
+    let mut entries = list_unlocked(root)?;
     // `list` is newest-first, so the survivors are its prefix.
     let cutoff = if days > 0 {
         Some(now_ms - days * 24 * 60 * 60 * 1000)
@@ -264,7 +357,7 @@ pub fn prune(root: &Path, days: i64, keep: usize, now_ms: i64) -> Result<usize, 
         let too_old = cutoff.is_some_and(|c| entry.created_at < c);
         let over_limit = keep > 0 && index >= keep;
         if too_old || over_limit {
-            delete(root, &entry.id)?;
+            delete_unlocked(root, &entry.id)?;
             removed += 1;
         }
     }
@@ -273,23 +366,30 @@ pub fn prune(root: &Path, days: i64, keep: usize, now_ms: i64) -> Result<usize, 
 
 /// Delete every entry.
 pub fn clear(root: &Path) -> Result<usize, String> {
+    let _guard = history_lock();
     let dir = history_dir(root);
     let entries = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(e) => return Err(format!("{}: {e}", dir.display())),
     };
-    let mut removed = 0usize;
+    let mut removed_ids = std::collections::HashSet::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        // Never remove unrelated files that merely happen to live in this folder.
+        if !(name.ends_with(".json") || name.ends_with(".tmp")) {
             continue;
         }
-        if std::fs::remove_file(&path).is_ok() {
-            removed += 1;
+        if name.ends_with(".json") && !name.ends_with(".meta.json") {
+            removed_ids.insert(name.trim_end_matches(".json").to_string());
         }
+        let _ = std::fs::remove_file(&path);
     }
-    Ok(removed)
+    Ok(removed_ids.len())
 }
 
 #[cfg(test)]
@@ -327,11 +427,15 @@ mod tests {
                 label: "a.txt".into(),
                 path: Some("/p/a.txt".into()),
                 text: left.into(),
+                bom: false,
+                lossy: false,
             },
             right: HistorySide {
                 label: "b.txt".into(),
                 path: None,
                 text: right.into(),
+                bom: false,
+                lossy: false,
             },
             options: HistoryOptions::default(),
         }
@@ -378,6 +482,117 @@ mod tests {
         save(&dir.path, entry("aaa", 500, "1", "2")).expect("save a");
         save(&dir.path, entry("bbb", 500, "3", "4")).expect("save b");
         assert_eq!(list(&dir.path).expect("list").len(), 2);
+    }
+
+    #[test]
+    fn generated_ids_do_not_overwrite_same_millisecond_entries() {
+        let dir = TempDir::new("generated-tie");
+        let first = save(&dir.path, entry("", 500, "1", "2"))
+            .expect("save first")
+            .expect("kept");
+        let second = save(&dir.path, entry("", 500, "3", "4"))
+            .expect("save second")
+            .expect("kept");
+        assert_ne!(first, second);
+        assert_eq!(list(&dir.path).expect("list").len(), 2);
+    }
+
+    #[test]
+    fn concurrent_saves_with_the_same_timestamp_all_survive() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = TempDir::new("concurrent-tie");
+        let root = Arc::new(dir.path.clone());
+        let barrier = Arc::new(Barrier::new(12));
+        let mut threads = Vec::new();
+        for index in 0..12 {
+            let root = Arc::clone(&root);
+            let barrier = Arc::clone(&barrier);
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                save(
+                    &root,
+                    entry("", 500, &format!("left-{index}"), &format!("right-{index}")),
+                )
+                .expect("save")
+                .expect("kept")
+            }));
+        }
+        let ids: std::collections::HashSet<String> = threads
+            .into_iter()
+            .map(|t| t.join().expect("join"))
+            .collect();
+        assert_eq!(ids.len(), 12, "every save must get a unique id");
+        assert_eq!(list(&dir.path).expect("list").len(), 12);
+    }
+
+    #[test]
+    fn list_uses_the_metadata_sidecar_instead_of_parsing_document_text() {
+        let dir = TempDir::new("sidecar");
+        let id = save(&dir.path, entry("entry", 42, "large body", "other"))
+            .expect("save")
+            .expect("kept");
+        let body = history_dir(&dir.path).join(format!("{id}.json"));
+        std::fs::write(&body, "not a history payload").expect("corrupt body");
+
+        let summaries = list(&dir.path).expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, id);
+        assert_eq!(summaries[0].left_label, "a.txt");
+    }
+
+    #[test]
+    fn a_sidecar_with_the_wrong_id_is_rebuilt_from_the_body() {
+        let dir = TempDir::new("sidecar-id");
+        let id = save(&dir.path, entry("entry", 42, "body", "other"))
+            .expect("save")
+            .expect("kept");
+        let history = history_dir(&dir.path);
+        let meta = history.join(format!("{id}.meta.json"));
+        let mut summary: HistorySummary =
+            serde_json::from_str(&std::fs::read_to_string(&meta).expect("meta")).expect("parse");
+        summary.id = "different-entry".into();
+        summary.left_label = "stale".into();
+        std::fs::write(&meta, serde_json::to_string(&summary).unwrap()).expect("write meta");
+
+        let summaries = list(&dir.path).expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, id);
+        assert_eq!(
+            summaries[0].left_label, "a.txt",
+            "the body rebuilds a trustworthy sidecar"
+        );
+        let rebuilt: HistorySummary =
+            serde_json::from_str(&std::fs::read_to_string(&meta).unwrap()).unwrap();
+        assert_eq!(rebuilt.id, id);
+    }
+
+    #[test]
+    fn a_sidecar_without_a_body_is_not_listed() {
+        let dir = TempDir::new("sidecar-dead");
+        let id = save(&dir.path, entry("entry", 42, "body", "other"))
+            .expect("save")
+            .expect("kept");
+        let body = history_dir(&dir.path).join(format!("{id}.json"));
+        std::fs::remove_file(body).expect("remove body");
+
+        assert!(
+            list(&dir.path).expect("list").is_empty(),
+            "metadata cannot resurrect a missing entry"
+        );
+    }
+
+    #[test]
+    fn a_legacy_entry_is_listed_and_gets_a_sidecar() {
+        let dir = TempDir::new("legacy-sidecar");
+        let id = save(&dir.path, entry("legacy", 7, "old", "entry"))
+            .expect("save")
+            .expect("kept");
+        let history = history_dir(&dir.path);
+        std::fs::remove_file(history.join(format!("{id}.meta.json"))).expect("remove sidecar");
+
+        assert_eq!(list(&dir.path).expect("first list").len(), 1);
+        assert!(history.join(format!("{id}.meta.json")).is_file());
     }
 
     // A comparison of two huge files would crowd out everything else, and a

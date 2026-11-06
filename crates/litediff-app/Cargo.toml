@@ -19,9 +19,11 @@ litediff-core = { path = "../litediff-core", features = ["serde"] }
 # Without it the app starts, opens a window, and shows a blank white page: there is
 # no dev server in a release build and no embedded assets to fall back to.
 tauri = { version = "2", features = ["custom-protocol"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tauri-plugin-dialog = "2"
+sha2 = "0.10"
+getrandom = "0.3"
 
 [features]
 default = []

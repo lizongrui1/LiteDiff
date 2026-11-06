@@ -136,14 +136,31 @@ export function renameTab(tabs: readonly Tab[], id: string, name: string): Tab[]
  */
 export function emptySession(): Session {
   return {
-    left: { path: null, label: "", text: "", git: null },
-    right: { path: null, label: "", text: "", git: null },
+    left: {
+      path: null,
+      label: "",
+      text: "",
+      git: null,
+      documentId: null,
+      bom: false,
+      lossy: false,
+    },
+    right: {
+      path: null,
+      label: "",
+      text: "",
+      git: null,
+      documentId: null,
+      bom: false,
+      lossy: false,
+    },
     result: {
       left_line_count: 0,
       right_line_count: 0,
       rows: [],
       hunks: [],
       stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
+      approximate: false,
     },
     options: {
       ignore_whitespace: false,
@@ -153,6 +170,7 @@ export function emptySession(): Session {
       intra_line_max_tokens: 0,
     },
     warnings: [],
+    contentKey: "",
   };
 }
 

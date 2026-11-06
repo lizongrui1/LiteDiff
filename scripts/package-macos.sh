@@ -18,6 +18,11 @@ BUNDLE_ID="app.litediff.desktop"
 VERSION="${VERSION:-$(python3 -c "import json;print(json.load(open('$ROOT/crates/litediff-app/tauri.conf.json'))['version'])" 2>/dev/null || echo 0.1.1)}"
 OUT_DIR="$ROOT/dist-macos"
 
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "ERROR: invalid semantic version: $VERSION" >&2
+  exit 1
+fi
+
 # Architecture of the binary being packaged, for the artifact name. Release
 # downloads must say which CPU they are for: an Intel user cannot run an arm64
 # binary and the filename is the only place that can warn them.

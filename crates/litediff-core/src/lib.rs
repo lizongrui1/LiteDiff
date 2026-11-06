@@ -40,6 +40,12 @@ pub use model::{
 };
 pub use source::{Line, SourceText};
 
+/// Work ceiling for one line-level Myers search.
+///
+/// This is deliberately far above a normal 20k-line/50-edit comparison while
+/// still bounding adversarial all-different inputs.
+pub const MYERS_WORK_BUDGET: usize = 25_000_000;
+
 /// Diff two documents and return the aligned result.
 ///
 /// Complexity: `O((N + M) * D)` time for Myers (with `D` the edit distance, so
@@ -57,9 +63,9 @@ pub fn diff(left: &str, right: &str, options: &DiffOptions) -> DiffResult {
 pub fn diff_sources(left: &SourceText, right: &SourceText, options: &DiffOptions) -> DiffResult {
     let (left_keys, right_keys) = intern::intern(left, right, options);
 
-    let matches = myers::matches(&left_keys.ids, &right_keys.ids);
+    let search = myers::matches_with_budget(&left_keys.ids, &right_keys.ids, MYERS_WORK_BUDGET);
 
-    let ops = ops_from_matches(left.line_count(), right.line_count(), &matches);
+    let ops = ops_from_matches(left.line_count(), right.line_count(), &search.matches);
     let (rows, hunks, stats) = align::build(left, right, &ops, options);
 
     DiffResult {
@@ -68,5 +74,6 @@ pub fn diff_sources(left: &SourceText, right: &SourceText, options: &DiffOptions
         rows,
         hunks,
         stats,
+        approximate: search.exhausted,
     }
 }
