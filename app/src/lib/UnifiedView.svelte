@@ -22,6 +22,7 @@
     type SearchSlice,
     type SearchViewState,
   } from "../lib/search";
+  import { slowWheel } from "./wheelScroll";
 
   /** One physical line in the unified layout. */
   interface UnifiedLine {
@@ -239,6 +240,7 @@
   class:wrapped
   bind:this={scroller}
   onscroll={handleScroll}
+  use:slowWheel
   role="presentation"
 >
   <div class="spacer" style:height="{totalHeight}px">

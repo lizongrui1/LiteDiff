@@ -17,6 +17,7 @@
   import type { Token, TokenSource } from "../lib/syntax";
   import { t } from "../lib/i18nStore";
   import { searchSlicesFor, type SearchViewState } from "../lib/search";
+  import { slowWheel } from "./wheelScroll";
 
   interface Props {
     side: SideName;
@@ -225,6 +226,7 @@
   class:wrapped
   bind:this={scroller}
   onscroll={handleScroll}
+  use:slowWheel
   role="presentation"
 >
 
