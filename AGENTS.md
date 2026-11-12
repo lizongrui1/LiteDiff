@@ -72,6 +72,20 @@
 
 如果无法证明不变量仍成立，停止实现并报告冲突，不要用放宽限制来“修复”测试。
 
+## 变更交付流程
+
+用户已授权每次改动按 GitHub 标准流程交付：分支 → 提交 → PR → 合并 → 打包。打标签和发布 Release 仍需用户单独要求。
+
+1. 从最新 `main` 新建分支：`<type>/<short-slug>`，`type` 取 `feat`/`fix`/`docs`/`test`/`chore`，slug 用小写英文和连字符，例如 `fix/eased-wheel-scroll`。
+2. 用 Conventional Commits 提交（`fix:`、`feat:`、`docs:`……）。一次改动一个提交，包含代码、测试和 `specs/changes/<id>/` 制品；提交前跑完对应门禁。不得直接向 `main` 提交。
+3. 推送分支并创建 PR 到 `main`。PR 描述必须包含：改动目的、执行的验证命令与结果、未执行项及原因、安全/性能/兼容性风险，并链接 `specs/changes/<id>/verification.md`。
+4. PR 通过检查后用 squash 合并（一个 PR 对应一个提交），合并后删除远端与本地分支，再 `git switch main && git pull --ff-only`。
+5. 从 `main` 重新打包：`bash scripts/package-macos.sh`，产物为 `dist-macos/LiteDiff.app`（`.gitignore` 已忽略）。只想要 `.app` 时加 `SKIP_DMG=1`。
+6. 交付说明给出分支名、提交号、PR 链接和 `.app` 路径。
+
+受限环境备注：本机 `~/.cargo` 注册表为空，且会话文件沙箱不允许写仓库外路径，因此打包命令为
+`PATH="$HOME/.cargo/bin:$PATH" CARGO_HOME="$PWD/target/cargo-home" SKIP_DMG=1 bash scripts/package-macos.sh`。
+
 ## 验证与完成
 
 完整门禁：
