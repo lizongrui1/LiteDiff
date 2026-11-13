@@ -1,4 +1,4 @@
-import type { InlineSegment } from "./types";
+import type { ChangedSpan } from "./diffView";
 import type { Token, TokenKind } from "./syntax";
 import type { SearchSlice } from "./search";
 
@@ -16,21 +16,15 @@ interface StyleSpan {
   kind: TokenKind;
 }
 
-function inlineSpans(text: string, segments: readonly InlineSegment[]): StyleSpan[] | null {
-  if (segments.length === 0 || segments.map((segment) => segment.text).join("") !== text) {
-    return null;
-  }
-
+/** Changed spans clipped to the visible text; `null` when there are none. */
+function changedSpans(text: string, changed: readonly ChangedSpan[]): StyleSpan[] | null {
   const out: StyleSpan[] = [];
-  let offset = 0;
-  for (const segment of segments) {
-    const end = offset + segment.text.length;
-    if (end > offset) {
-      out.push({ start: offset, end, changed: segment.changed, kind: "plain" });
-    }
-    offset = end;
+  for (const span of changed) {
+    const start = Math.max(0, span.start);
+    const end = Math.min(text.length, span.end);
+    if (end > start) out.push({ start, end, changed: true, kind: "plain" });
   }
-  return out;
+  return out.length === 0 ? null : out;
 }
 
 function tokenSpans(text: string, tokens: readonly Token[]): StyleSpan[] | null {
@@ -64,29 +58,38 @@ function searchAt(slices: readonly SearchSlice[], start: number, end: number): C
 /**
  * Build the exact text nodes for one rendered code line.
  *
- * `text` is the single source of truth. Inline segments and syntax tokens only
- * add styling when their concatenation exactly matches `text`; otherwise they
- * are ignored. That validation is essential for wrapped lines: a stale or
- * over-long style span used to make several continuation rows repeat the whole
- * logical line instead of their own slice.
+ * `text` is the single source of truth. Two styling sources are possible, and
+ * they are mutually exclusive:
+ *
+ * * `changed` — character ranges the backend reported as modified. When present
+ *   they win, because the reader is comparing two nearly identical lines and the
+ *   pills showing *which character* changed carry more information than colouring
+ *   a keyword. How a gap between two ranges is styled is "plain"; it is not a
+ *   token-coloured region, exactly as before.
+ * * syntax `tokens` — used when the row has no character-level information
+ *   (equal/insert/delete rows, or a modify row produced with intra-line diffing
+ *   switched off).
+ *
+ * Both inputs are offsets into `text`; anything out of range is clamped rather
+ * than trusted.
  */
 export function buildCodePieces(
   text: string,
-  segments: readonly InlineSegment[],
+  changed: readonly ChangedSpan[],
   tokens: readonly Token[],
   search: readonly SearchSlice[] = [],
 ): CodePiece[] {
   if (text.length === 0) return [];
 
-  const styles =
-    inlineSpans(text, segments) ??
-    tokenSpans(text, tokens) ??
-    [{ start: 0, end: text.length, changed: false, kind: "plain" as const }];
+  const changedStyles = changedSpans(text, changed);
+  const styles = changedStyles ?? tokenSpans(text, tokens);
 
   const boundaries = new Set<number>([0, text.length]);
-  for (const span of styles) {
-    boundaries.add(span.start);
-    boundaries.add(span.end);
+  if (styles !== null) {
+    for (const span of styles) {
+      boundaries.add(span.start);
+      boundaries.add(span.end);
+    }
   }
   for (const slice of search) {
     boundaries.add(slice.start);
@@ -104,12 +107,21 @@ export function buildCodePieces(
     const end = points[i + 1];
     if (end <= start) continue;
 
-    while (styleIndex < styles.length && styles[styleIndex].end <= start) styleIndex++;
-    const style = styles[Math.min(styleIndex, styles.length - 1)];
+    let changedHere = false;
+    let kind: TokenKind = "plain";
+    if (styles !== null) {
+      while (styleIndex < styles.length && styles[styleIndex].end <= start) styleIndex++;
+      const style = styles[styleIndex];
+      if (style && style.start <= start && style.end >= end) {
+        changedHere = style.changed;
+        kind = style.kind;
+      }
+    }
+
     const piece: CodePiece = {
       text: text.slice(start, end),
-      changed: style.start <= start && style.end >= end ? style.changed : false,
-      kind: style.start <= start && style.end >= end ? style.kind : "plain",
+      changed: changedHere,
+      kind,
       search: searchAt(search, start, end),
     };
 

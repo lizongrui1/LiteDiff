@@ -229,12 +229,54 @@ impl DiffResult {
     }
 }
 
+/// Number of ops the greedy script below will contain.
+///
+/// The old capacity bound (`matches.len() * 2 + 2`) is two orders of magnitude
+/// above the real count for near-identical documents — one equal run plus a few
+/// change runs — and at 200,000 matched lines that over-allocation is several
+/// megabytes of peak memory. Counting first is one extra O(matches) pass with no
+/// allocation, and lets the output buffer be sized exactly once.
+///
+/// The counter must mirror every push in [`ops_from_matches`]: a push per
+/// non-empty delete gap, per non-empty insert gap, per equal run that does not
+/// continue the previous equal run, and for the trailing gaps.
+fn op_count(left_len: u32, right_len: u32, matches: &[(u32, u32)]) -> usize {
+    let mut count = 0usize;
+    let mut li = 0u32;
+    let mut ri = 0u32;
+    let mut equal_end: Option<(u32, u32)> = None;
+
+    for &(al, br) in matches {
+        if al > li {
+            count += 1;
+        }
+        if br > ri {
+            count += 1;
+        }
+        let continues_equal = equal_end == Some((al, br));
+        if !continues_equal {
+            count += 1;
+        }
+        equal_end = Some((al + 1, br + 1));
+        li = al + 1;
+        ri = br + 1;
+    }
+
+    if left_len > li {
+        count += 1;
+    }
+    if right_len > ri {
+        count += 1;
+    }
+    count
+}
+
 /// Convert an ordered, ascending list of matched `(left, right)` index pairs
 /// into a gap-filling edit script. Deleting gaps are emitted before inserting
 /// gaps so that a replacement reads as "delete then insert" and the aligner can
 /// pair them into [`RowKind::Modify`] rows.
 pub fn ops_from_matches(left_len: u32, right_len: u32, matches: &[(u32, u32)]) -> Vec<LineOp> {
-    let mut ops: Vec<LineOp> = Vec::with_capacity(matches.len().saturating_mul(2) + 2);
+    let mut ops: Vec<LineOp> = Vec::with_capacity(op_count(left_len, right_len, matches));
     let mut li = 0u32;
     let mut ri = 0u32;
 
@@ -305,4 +347,45 @@ pub fn ops_from_matches(left_len: u32, right_len: u32, matches: &[(u32, u32)]) -
     }
 
     ops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The counting pass must agree with what the builder actually emits, or a
+    /// future change to the push rules would silently regress the allocation.
+    fn assert_count_matches_output(left_len: u32, right_len: u32, matches: &[(u32, u32)]) {
+        let ops = ops_from_matches(left_len, right_len, matches);
+        assert_eq!(
+            op_count(left_len, right_len, matches),
+            ops.len(),
+            "op_count disagrees with ops_from_matches for left={left_len} right={right_len} matches={matches:?}"
+        );
+    }
+
+    #[test]
+    fn op_count_matches_output_for_every_shape() {
+        assert_count_matches_output(0, 0, &[]);
+        // Empty left, all inserted.
+        assert_count_matches_output(0, 5, &[]);
+        // All deleted.
+        assert_count_matches_output(5, 0, &[]);
+        // Identical documents: one merged equal run.
+        assert_count_matches_output(4, 4, &[(0, 0), (1, 1), (2, 2), (3, 3)]);
+        // A single replacement in the middle.
+        assert_count_matches_output(4, 4, &[(0, 0), (2, 2), (3, 3)]);
+        // Alternating matches and gaps (every gap opens a new equal run).
+        assert_count_matches_output(3, 3, &[(0, 0), (2, 2)]);
+        // One side longer than the other with a tail.
+        assert_count_matches_output(6, 3, &[(0, 0), (1, 1), (2, 2)]);
+        // Interleaved insertion-then-deletion gaps.
+        assert_count_matches_output(5, 7, &[(0, 0), (2, 3), (4, 6)]);
+    }
+
+    #[test]
+    fn op_count_is_never_above_the_old_upper_bound() {
+        let matches: Vec<(u32, u32)> = (0..10).map(|i| (i, i)).collect();
+        assert!(op_count(10, 10, &matches) <= matches.len() * 2 + 2);
+    }
 }

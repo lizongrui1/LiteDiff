@@ -19,7 +19,7 @@
  */
 
 import { metrics } from "./theme";
-import type { Hunk } from "./types";
+import type { Hunk, RowKind } from "./types";
 
 /** One physical slice of a logical line, expressed as UTF-16 offsets. */
 export interface WrapRange {
@@ -82,6 +82,12 @@ export interface CollapseInfo {
   hunkIndex: number;
   /** How many rows the run spans. */
   rowCount: number;
+}
+
+/** Minimal row-kind view of a diff, so viewport maths stays independent of IPC. */
+export interface RowKindAccess {
+  readonly length: number;
+  kindAt(row: number): RowKind;
 }
 
 export interface FoldInfo {
@@ -610,7 +616,7 @@ export type UnifiedItem =
  */
 export function buildUnifiedDisplay(
   hunks: Hunk[],
-  rows: ReadonlyArray<{ kind: string }>,
+  rows: RowKindAccess,
   threshold: number,
   expanded: ReadonlySet<number>,
 ): UnifiedItem[] {
@@ -620,7 +626,7 @@ export function buildUnifiedDisplay(
     void hunkIndex;
     // A modify row shows the old line then the new one; every other kind shows one
     // line. This is the same rule `unifiedIndexForRow` counts with.
-    if (rows[sourceRow]?.kind === "modify") {
+    if (rows.kindAt(sourceRow) === "modify") {
       items.push({ fold: null, sourceRow, side: "left", half: 0 });
       items.push({ fold: null, sourceRow, side: "right", half: 1 });
       return;
@@ -755,14 +761,14 @@ export function unifiedIndexIn(items: readonly UnifiedItem[], row: number): numb
  * Mirrors `UnifiedView`'s flattening exactly; the two must stay in step.
  */
 export function unifiedIndexForRow(
-  rows: ReadonlyArray<{ kind: string }>,
+  rows: RowKindAccess,
   row: number,
 ): number {
   let lines = 0;
   const upto = Math.min(row, rows.length);
   for (let i = 0; i < upto; i++) {
     // A modify row renders twice; every other kind renders once.
-    lines += rows[i].kind === "modify" ? 2 : 1;
+    lines += rows.kindAt(i) === "modify" ? 2 : 1;
   }
   return lines;
 }
@@ -771,7 +777,7 @@ export function unifiedIndexForRow(
  * Total unified line count for an aligned row list.
  */
 export function unifiedLineCount(
-  rows: ReadonlyArray<{ kind: string }>,
+  rows: RowKindAccess,
 ): number {
   return unifiedIndexForRow(rows, rows.length);
 }

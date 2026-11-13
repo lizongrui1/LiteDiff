@@ -1,8 +1,8 @@
 # LiteDiff 产品规范
 
 - Status: Accepted
-- Version: 1.0
-- Last updated: 2026-11-06
+- Version: 1.1
+- Last updated: 2026-11-13
 - Owner: LiteDiff maintainers
 - Scope: 当前发布的 macOS 与 Windows 桌面应用
 
@@ -200,6 +200,7 @@ Windows 上 `Ctrl` 对应 macOS 的 `Cmd`。
 | REQ-PERF-06 | 分栏和统一视图只渲染视口 + overscan；滚动和输入事件不得扫描全文。 |
 | REQ-PERF-07 | 修改选项时优先返回 `SessionUpdate`，不得为了换一个布尔选项重复传输两篇全文。 |
 | REQ-PERF-08 | 所有近似、截断或退化必须确定性、有界，并在 UI 或验证记录中说明。 |
+| REQ-PERF-09 | 单次比较跨 IPC 的 diff 负载不得逐行传输对象或高亮文本：行网格由 `hunks` 推导，修改行只传 changed 的 UTF-16 区间；渲染进程用类型化数组保存行网格，不为整篇文档预生成每行字符串。 |
 
 ## 14. 平台与发布
 

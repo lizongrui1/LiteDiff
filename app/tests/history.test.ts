@@ -35,10 +35,11 @@ const session = (left: Side, right: Side, over: Partial<Session> = {}): Session 
   result: {
     left_line_count: 1,
     right_line_count: 1,
-    rows: [],
     hunks: [],
     stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
     approximate: false,
+    left_changed: [],
+    right_changed: [],
   },
   options: {
     ignore_whitespace: false,
@@ -195,7 +196,7 @@ test("a restored session carries no diff result and no git origin", () => {
    */
   const entry = entryFromSession(session(side({ text: "a" }), side({ text: "b" })), 1);
   const restored = sessionFromEntry(entry);
-  assert.deepEqual(restored.result.rows, []);
+  assert.equal(restored.result.hunks.length, 0);
   assert.equal(restored.result.hunks.length, 0);
   assert.equal(restored.left.git, null);
   assert.equal(restored.right.git, null);

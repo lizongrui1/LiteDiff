@@ -8,6 +8,9 @@
 pub mod commands;
 pub mod git;
 pub mod history;
+pub mod wire;
+
+pub use wire::{wire_diff, WireDiff};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -16,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use litediff_core::{DiffOptions, DiffResult, SourceText};
+use litediff_core::{DiffOptions, SourceText};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -69,7 +72,8 @@ pub struct Side {
 pub struct Session {
     pub left: Side,
     pub right: Side,
-    pub result: DiffResult,
+    /// Compact diff payload; the row grid is re-derived in the renderer.
+    pub result: WireDiff,
     pub options: DiffOptions,
     pub warnings: Vec<String>,
     /// Backend-computed identity of the two source documents.
@@ -83,7 +87,7 @@ pub struct Session {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUpdate {
-    pub result: DiffResult,
+    pub result: WireDiff,
     pub options: DiffOptions,
     pub warnings: Vec<String>,
     pub content_key: String,
@@ -139,8 +143,10 @@ impl OptionsPatch {
 struct CachedSession {
     left: Side,
     right: Side,
-    left_source: SourceText,
-    right_source: SourceText,
+    /// `Arc` so a `diff()` snapshot clones two pointers instead of the two line
+    /// indexes (~2.4 MB per side at the 200,000-line limit).
+    left_source: Arc<SourceText>,
+    right_source: Arc<SourceText>,
     options: DiffOptions,
     left_warnings: Vec<String>,
     right_warnings: Vec<String>,
@@ -399,7 +405,7 @@ impl AppState {
     ) -> Result<Session, String> {
         validate_session_id(session_id)?;
         let side = self.prepare_side(side)?;
-        let source = SourceText::from_shared(Arc::clone(&side.text));
+        let source = Arc::new(SourceText::from_shared(Arc::clone(&side.text)));
         {
             let mut sessions = self.sessions();
             let session = sessions.entry(session_id.to_string()).or_default();
@@ -434,8 +440,8 @@ impl AppState {
         validate_session_id(session_id)?;
         let left = self.prepare_side(left)?;
         let right = self.prepare_side(right)?;
-        let left_source = SourceText::from_shared(Arc::clone(&left.text));
-        let right_source = SourceText::from_shared(Arc::clone(&right.text));
+        let left_source = Arc::new(SourceText::from_shared(Arc::clone(&left.text)));
+        let right_source = Arc::new(SourceText::from_shared(Arc::clone(&right.text)));
         {
             let mut sessions = self.sessions();
             let session = sessions.entry(session_id.to_string()).or_default();
@@ -476,12 +482,12 @@ impl AppState {
             if let Some(text) = left {
                 let text: Arc<str> = Arc::from(text);
                 session.left.text = Arc::clone(&text);
-                session.left_source = SourceText::from_shared(text);
+                session.left_source = Arc::new(SourceText::from_shared(text));
             }
             if let Some(text) = right {
                 let text: Arc<str> = Arc::from(text);
                 session.right.text = Arc::clone(&text);
-                session.right_source = SourceText::from_shared(text);
+                session.right_source = Arc::new(SourceText::from_shared(text));
             }
         }
         self.diff(session_id)
@@ -526,7 +532,9 @@ impl AppState {
             content_key: content_key(&snapshot.left, &snapshot.right),
             left: snapshot.left,
             right: snapshot.right,
-            result,
+            // The aligned row grid stays in the backend: the renderer derives it
+            // from the hunks, so only the compact payload crosses IPC.
+            result: wire_diff(result),
             options: snapshot.options,
             warnings,
         })
@@ -988,7 +996,7 @@ mod tests {
     fn empty_state_diffs_to_an_empty_session() {
         let state = AppState::default();
         let session = state.diff("tab-1").unwrap();
-        assert_eq!(session.result.rows.len(), 0);
+        assert_eq!(session.result.row_count(), 0);
         assert!(session.result.is_identical());
     }
 
@@ -1006,7 +1014,7 @@ mod tests {
             )
             .unwrap();
         let session = state.diff("tab-1").unwrap();
-        assert_eq!(session.result.rows.len(), 2);
+        assert_eq!(session.result.row_count(), 2);
         assert_eq!(session.result.stats.deleted, 2);
         assert_eq!(session.left.text.as_ref(), "a\nb\n");
     }
@@ -1416,5 +1424,76 @@ mod tests {
         let relaxed = state.diff("tab-options").unwrap();
         assert!(relaxed.result.is_identical());
         assert_eq!(relaxed.left.text.as_ref(), "a\n");
+    }
+
+    #[test]
+    fn session_json_keeps_its_shape_but_carries_a_compact_result() {
+        let state = AppState::default();
+        state
+            .set_sides(
+                "tab-json",
+                Side {
+                    text: Arc::from("a\nb\n"),
+                    ..Default::default()
+                },
+                Side {
+                    text: Arc::from("a\nc\n"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let value = serde_json::to_value(state.diff("tab-json").unwrap()).unwrap();
+        let session = value.as_object().unwrap();
+        // The outer Session object keeps its camelCase IPC shape.
+        for key in [
+            "left",
+            "right",
+            "result",
+            "options",
+            "warnings",
+            "contentKey",
+        ] {
+            assert!(session.contains_key(key), "Session field {key} missing");
+        }
+        // Only the nested diff payload changed: no row grid, compact fields.
+        let result = session["result"].as_object().unwrap();
+        assert!(!result.contains_key("rows"));
+        for key in [
+            "left_line_count",
+            "right_line_count",
+            "hunks",
+            "stats",
+            "approximate",
+            "left_changed",
+            "right_changed",
+        ] {
+            assert!(result.contains_key(key), "WireDiff field {key} missing");
+        }
+    }
+
+    #[test]
+    fn cached_sources_share_the_side_text_allocation() {
+        let state = AppState::default();
+        let text: Arc<str> = Arc::from("a\nb\n");
+        state
+            .set_sides(
+                "tab-shared",
+                Side {
+                    text: Arc::clone(&text),
+                    ..Default::default()
+                },
+                Side::default(),
+            )
+            .unwrap();
+
+        // A diff() snapshot must clone the pointer, never the line index.
+        let sessions = state.sessions();
+        let session = sessions.get("tab-shared").unwrap();
+        assert!(Arc::ptr_eq(&session.left.text, &text));
+        assert!(Arc::ptr_eq(&session.left_source.shared_text(), &text));
+        assert!(Arc::ptr_eq(
+            &session.left_source.shared_text(),
+            &session.left.text
+        ));
     }
 }

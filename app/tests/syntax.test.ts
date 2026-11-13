@@ -322,3 +322,28 @@ test("syntax colours do not collide with the change tints", () => {
     );
   }
 });
+
+test("lazy token source reproduces eager line highlighting", async () => {
+  const { createTokenSource, highlightLines } = await import("../src/lib/syntax.ts");
+  const { lineIndex } = await import("../src/lib/lines.ts");
+
+  const lines = [
+    "/* block comment starts",
+    "still inside */",
+    'const value = "string"',
+    "function run(arg) {",
+    "  return arg + 1;",
+    "}",
+  ];
+  const text = lines.join("\n");
+  const eager = highlightLines(lines, "go");
+  const source = createTokenSource(lineIndex(text), "go");
+  assert.ok(source, "a non-plain language gets a token source");
+  for (let i = 0; i < lines.length; i++) {
+    assert.deepEqual(source.get(i), eager[i].tokens, `tokens for line ${i}`);
+  }
+  // Out-of-range and missing lines are empty, not undefined.
+  assert.deepEqual(source.get(null), []);
+  assert.deepEqual(source.get(-1), []);
+  assert.deepEqual(source.get(lines.length), []);
+});

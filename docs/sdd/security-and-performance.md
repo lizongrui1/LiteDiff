@@ -40,6 +40,8 @@
 | PERF-07 | 大仓库文件树和提交列表有界 | 文件列表 20,000；提交 500 | clamp tests |
 | PERF-08 | 历史条目超过 4 MiB 不截断，直接不保存 | `MAX_ENTRY_BYTES` | history tests |
 | PERF-09 | 搜索和渲染结果必须确定性，避免重复计算导致漂移 | search/viewport 纯函数 | deterministic tests |
+| PERF-10 | 单次比较的 IPC 负载不逐行传输对象或高亮文本：行网格由 `hunks` 在渲染进程用类型化数组推导，修改行只传 changed 的 UTF-16 区间 | `wire.rs`、`diffView.ts` | wire/diffView 测试、JSON 体积基准 |
+| PERF-11 | 渲染进程不为整篇文档预生成每行字符串，也不保留分段文本副本 | `lines.ts`、`diffView.ts` | LineIndex 测试、JS 堆基准 |
 
 ### 性能改动清单
 
