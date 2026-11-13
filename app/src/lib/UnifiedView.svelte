@@ -13,7 +13,10 @@
    */
 
   import CodeLine from "./CodeLine.svelte";
-  import type { AlignedRow, InlineSegment, RowKind } from "../lib/types";
+  import type { RowKind } from "../lib/types";
+  import type { LineIndex } from "../lib/lines";
+  import { lineText } from "../lib/lines";
+  import { changedSpansAt, lineAt, type ChangedSpan, type DiffTable } from "../lib/diffView";
   import type { UnifiedItem } from "../lib/viewport";
   import type { Token, TokenSource } from "../lib/syntax";
   import { t } from "../lib/i18nStore";
@@ -32,7 +35,7 @@
     lineNumber: number | null;
     side: "left" | "right";
     text: string;
-    segments: InlineSegment[];
+    changed: ChangedSpan[];
     tokens: Token[];
     continued: boolean;
     searchSlices: SearchSlice[];
@@ -41,7 +44,7 @@
   }
 
   interface Props {
-    rows: AlignedRow[];
+    rows: DiffTable;
     /**
      * The flattened, already-folded line list.
      *
@@ -50,8 +53,8 @@
      * truth would put the scrollbar out of step with what is drawn.
      */
     items: UnifiedItem[];
-    leftLines: string[];
-    rightLines: string[];
+    leftLines: LineIndex;
+    rightLines: LineIndex;
     /** Render window, computed by the parent in unified-line coordinates. */
     start: number;
     end: number;
@@ -100,14 +103,10 @@
    */
   function lineFor(item: UnifiedItem): UnifiedLine | null {
     if (item.fold !== null) return null;
-    const row = rows[item.sourceRow];
-    if (!row) return null;
-
-    const isModify = row.kind === "modify";
     const side = item.side;
-    const lineNumber = side === "left" ? row.left : row.right;
-    const fullText =
-      lineNumber === null ? "" : (side === "left" ? leftLines : rightLines)[lineNumber] ?? "";
+    const lineNumber = lineAt(rows, item.sourceRow, side);
+    const fullText = lineText(side === "left" ? leftLines : rightLines, lineNumber);
+    const isModify = rows.kindAt(item.sourceRow) === "modify";
     const range = item.wrap
       ? {
           start: item.wrap.start,
@@ -115,7 +114,6 @@
           text: fullText.slice(item.wrap.start, item.wrap.end),
         }
       : { start: 0, end: fullText.length, text: fullText };
-    const segments = side === "left" ? row.left_inline : row.right_inline;
     const tokens =
       lineNumber === null
         ? []
@@ -133,7 +131,11 @@
 
     // A modify row draws as a deletion above an insertion; everything else keeps its
     // own kind. This is the canonical unified rendering.
-    const kind: RowKind = isModify ? (side === "left" ? "delete" : "insert") : row.kind;
+    const kind: RowKind = isModify
+      ? side === "left"
+        ? "delete"
+        : "insert"
+      : rows.kindAt(item.sourceRow);
 
     return {
       key: `${side}${item.sourceRow}`,
@@ -141,43 +143,14 @@
       lineNumber,
       side,
       text: range.text,
-      segments: sliceSegments(item, segments, range),
+      changed: item.wrap
+        ? changedSpansAt(rows, side, item.sourceRow, range.start, range.end)
+        : changedSpansAt(rows, side, item.sourceRow),
       tokens: sliceTokens(item, tokens, range),
       continued: item.wrap?.continued ?? false,
       searchSlices,
       sourceRow: item.sourceRow,
     };
-  }
-
-  /** Wrapped lines must show only their own slice of the inline highlights. */
-  function sliceSegments(
-    item: UnifiedItem,
-    segments: InlineSegment[],
-    range: { start: number; end: number },
-  ): InlineSegment[] {
-    if (!item.wrap || segments.length === 0) return segments;
-
-    const out: InlineSegment[] = [];
-    let offset = 0;
-    for (const segment of segments) {
-      const segmentStart = offset;
-      const segmentEnd = offset + segment.text.length;
-      offset = segmentEnd;
-      if (segmentEnd <= range.start) continue;
-      if (segmentStart >= range.end) break;
-
-      const from = Math.max(0, range.start - segmentStart);
-      const to = Math.min(segment.text.length, range.end - segmentStart);
-      if (to > from) {
-        out.push({
-          ...segment,
-          text: segment.text.slice(from, to),
-          char_start: Math.max(segment.char_start, range.start),
-          char_end: Math.min(segment.char_end, range.end),
-        });
-      }
-    }
-    return out;
   }
 
   /** Token spans use UTF-16 offsets, so they follow the same character range. */
@@ -284,7 +257,7 @@
             <CodeLine
               line={u.lineNumber}
               kind={u.kind}
-              segments={u.segments}
+              changed={u.changed}
               text={u.text}
               side={u.side}
               continued={u.continued}

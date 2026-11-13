@@ -157,10 +157,11 @@ export function emptySession(): Session {
     result: {
       left_line_count: 0,
       right_line_count: 0,
-      rows: [],
       hunks: [],
       stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
       approximate: false,
+      left_changed: [],
+      right_changed: [],
     },
     options: {
       ignore_whitespace: false,

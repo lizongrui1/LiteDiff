@@ -36,6 +36,14 @@ import {
   type UnifiedItem,
 } from "../src/lib/viewport.ts";
 
+/** Minimal row-kind accessor for the unified projection tests. */
+function rowsOf(kinds: Array<"equal" | "modify" | "delete" | "insert">) {
+  return {
+    length: kinds.length,
+    kindAt: (row: number) => kinds[row],
+  };
+}
+
 /** Minimal hunk factory so each test states only what it cares about. */
 function hunk(equal, rowStart, rowLen, leftLen = rowLen, rightLen = rowLen) {
   return {
@@ -371,7 +379,7 @@ test("a fold never claims the context rows it leaves visible", () => {
 
 test("unifiedIndexForRow counts modify rows twice", () => {
   // equal, modify, equal -> unified lines: 1, 2, 3 -> indices 0,1,2,3,4
-  const rows = [{ kind: "equal" }, { kind: "modify" }, { kind: "equal" }];
+  const rows = rowsOf(["equal", "modify", "equal"]);
   assert.equal(unifiedIndexForRow(rows, 0), 0, "start of the document");
   assert.equal(unifiedIndexForRow(rows, 1), 1, "the modify row starts at line 1");
   assert.equal(unifiedIndexForRow(rows, 2), 3, "one modify adds an extra line");
@@ -379,13 +387,7 @@ test("unifiedIndexForRow counts modify rows twice", () => {
 });
 
 test("unifiedIndexForRow matches the rendered line count", () => {
-  const rows = [
-    { kind: "equal" },
-    { kind: "delete" },
-    { kind: "insert" },
-    { kind: "modify" },
-    { kind: "modify" },
-  ];
+  const rows = rowsOf(["equal", "delete", "insert", "modify", "modify"]);
   // 1 + 1 + 1 + 2 + 2 = 7 physical lines
   assert.equal(unifiedLineCount(rows), 7);
   // Navigating to the last modify row must land on its first rendered line.
@@ -393,15 +395,15 @@ test("unifiedIndexForRow matches the rendered line count", () => {
 });
 
 test("unifiedIndexForRow clamps out-of-range rows", () => {
-  const rows = [{ kind: "equal" }, { kind: "equal" }];
+  const rows = rowsOf(["equal", "equal"]);
   assert.equal(unifiedIndexForRow(rows, 99), 2);
-  assert.equal(unifiedLineCount([]), 0);
+  assert.equal(unifiedLineCount(rowsOf([])), 0);
 });
 
 test("split and unified projection disagree, so each view needs its own", () => {
   // This is the bug that motivated the split: reusing the split index inside the
   // unified view lands one line early per modification above the target.
-  const rows = [{ kind: "modify" }, { kind: "equal" }, { kind: "modify" }];
+  const rows = rowsOf(["modify", "equal", "modify"]);
   const sourceRow = 2;
   assert.equal(sourceRow, 2, "split index equals the source row");
   assert.equal(unifiedIndexForRow(rows, sourceRow), 3, "unified index differs");
@@ -746,8 +748,10 @@ const uHunk = (over: Partial<Hunk> & { equal: boolean; row_start: number; row_le
 });
 
 /** Rows where `changed` picks the kind; used to keep the projection honest. */
-const rowKinds = (n: number, changed: (i: number) => boolean) =>
-  Array.from({ length: n }, (_, i) => ({ kind: changed(i) ? "modify" : "equal" }));
+const rowKinds = (n: number, changed: (i: number) => boolean) => ({
+  length: n,
+  kindAt: (i: number) => (changed(i) ? "modify" : "equal") as "modify" | "equal",
+});
 
 test("an unchanged run longer than the threshold collapses to one bar", () => {
   const hunks = [uHunk({ equal: true, row_start: 0, row_len: 100 })];

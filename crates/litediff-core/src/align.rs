@@ -24,6 +24,36 @@ use crate::model::{AlignedRow, ChangeTag, DiffOptions, DiffStats, Hunk, LineOp, 
 use crate::source::SourceText;
 use crate::token;
 
+/// Exact number of rows [`build`] will emit for an edit script.
+///
+/// Mirrors the flush bookkeeping in [`build`]: a change block produces
+/// `max(pending_delete, pending_insert)` rows because the shorter side is padded,
+/// and an equal run produces one row per line.
+fn aligned_row_count(ops: &[LineOp]) -> usize {
+    let mut count = 0usize;
+    let mut pending_delete = 0u32;
+    let mut pending_insert = 0u32;
+
+    for op in ops {
+        match op.tag {
+            ChangeTag::Equal => {
+                if pending_delete > 0 || pending_insert > 0 {
+                    count += pending_delete.max(pending_insert) as usize;
+                    pending_delete = 0;
+                    pending_insert = 0;
+                }
+                count += op.left_len as usize;
+            }
+            ChangeTag::Delete => pending_delete = op.left_len,
+            ChangeTag::Insert => pending_insert = op.right_len,
+        }
+    }
+    if pending_delete > 0 || pending_insert > 0 {
+        count += pending_delete.max(pending_insert) as usize;
+    }
+    count
+}
+
 /// Convert an edit script into aligned rows, hunks and counters.
 pub fn build(
     left: &SourceText,
@@ -31,8 +61,14 @@ pub fn build(
     ops: &[LineOp],
     options: &DiffOptions,
 ) -> (Vec<AlignedRow>, Vec<Hunk>, DiffStats) {
-    let mut rows: Vec<AlignedRow> =
-        Vec::with_capacity((left.line_count() + right.line_count()) as usize);
+    // The row count is known exactly from the edit script: equal runs
+    // contribute their length, each pending delete/insert pair contributes
+    // `max(del, ins)` rows. Computing it first costs one O(ops) pass, but the
+    // previous upper bound — `left + right` — over-allocates an `AlignedRow`
+    // array by roughly 2x for the common case of two similar files, which is
+    // ~14 MB of peak memory at the 200,000-line limit.
+    let planned_rows = aligned_row_count(ops);
+    let mut rows: Vec<AlignedRow> = Vec::with_capacity(planned_rows);
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut stats = DiffStats::default();
     let mut pending_delete: Option<(u32, u32)> = None; // (start, len)
@@ -134,6 +170,11 @@ pub fn build(
         }
     }
 
+    debug_assert_eq!(
+        rows.len(),
+        planned_rows,
+        "row-count estimate must match the rows the flush rules produce"
+    );
     stats.modified = rows.iter().filter(|r| r.kind == RowKind::Modify).count() as u32;
     stats.deleted = rows.iter().filter(|r| r.kind == RowKind::Delete).count() as u32;
     stats.added = rows.iter().filter(|r| r.kind == RowKind::Insert).count() as u32;
@@ -207,6 +248,35 @@ mod tests {
         let rows = pair_block(5, 2, 0, 1);
         assert_eq!(rows[0], (Some(5), Some(0), RowKind::Modify));
         assert_eq!(rows[1], (Some(6), None, RowKind::Delete));
+    }
+
+    #[test]
+    fn row_plan_matches_the_rows_the_aligner_emits() {
+        // The capacity estimate is only useful if it is exact; a mismatch would
+        // mean either a wasted reallocation or a wrong bound in the debug build.
+        let fixtures: &[(&str, &str)] = &[
+            ("", ""),
+            ("", "a\nb\nc\n"),
+            ("a\nb\nc\n", ""),
+            ("a\nb\nc\n", "a\nb\nc\n"),
+            ("a\nb\nc\n", "a\nX\nc\n"),
+            ("a\nb\nc\nd\n", "a\nX\nY\nc\nd\n"),
+            ("a\nb\n", "b\na\n"),
+            ("a\nb\nc\nd\ne\n", "a\nx\nc\ny\ne\n"),
+        ];
+        for (l, r) in fixtures {
+            let left = SourceText::new(*l);
+            let right = SourceText::new(*r);
+            let (lk, rk) = crate::intern::intern(&left, &right, &DiffOptions::default());
+            let matches = crate::myers::matches(&lk.ids, &rk.ids);
+            let ops = ops_from_matches(left.line_count(), right.line_count(), &matches);
+            let (rows, _, _) = build(&left, &right, &ops, &DiffOptions::default());
+            assert_eq!(
+                aligned_row_count(&ops),
+                rows.len(),
+                "row plan disagreed for {l:?} vs {r:?}"
+            );
+        }
     }
 
     #[test]

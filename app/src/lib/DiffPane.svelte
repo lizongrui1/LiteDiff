@@ -12,7 +12,10 @@
    * fight each other into a feedback loop.
    */
   import CodeLine from "./CodeLine.svelte";
-  import type { AlignedRow, InlineSegment, SideName } from "../lib/types";
+  import type { SideName } from "../lib/types";
+  import type { LineIndex } from "../lib/lines";
+  import { lineText } from "../lib/lines";
+  import { changedSpansAt, lineAt, type DiffTable } from "../lib/diffView";
   import type { DisplayItem, Window } from "../lib/viewport";
   import type { Token, TokenSource } from "../lib/syntax";
   import { t } from "../lib/i18nStore";
@@ -21,9 +24,10 @@
 
   interface Props {
     side: SideName;
-    /** Raw text of this side, for looking up line content. */
-    lines: string[];
-    rows: AlignedRow[];
+    /** Lazy line index of this side, for looking up line content. */
+    lines: LineIndex;
+    /** Decoded diff grid: typed arrays plus hunk metadata. */
+    rows: DiffTable;
     items: DisplayItem[];
     win: Window;
     /** Display index under the pointer, for the hover affordance. */
@@ -150,43 +154,6 @@
     return out;
   }
 
-  /**
-   * Slice inline highlights with the same character range as the displayed text.
-   *
-   * The backend builds segments for the full logical line. Reusing them untouched
-   * on every wrapped slice made each physical line repeat the whole row, and the
-   * character pills stopped lining up with the visible fragment.
-   */
-  function segmentsFor(
-    segments: InlineSegment[],
-    range: { start: number; end: number },
-    wrapped: boolean,
-  ): InlineSegment[] {
-    if (!wrapped || segments.length === 0) return segments;
-
-    const out: InlineSegment[] = [];
-    let offset = 0;
-    for (const segment of segments) {
-      const segmentStart = offset;
-      const segmentEnd = offset + segment.text.length;
-      offset = segmentEnd;
-      if (segmentEnd <= range.start) continue;
-      if (segmentStart >= range.end) break;
-
-      const from = Math.max(0, range.start - segmentStart);
-      const to = Math.min(segment.text.length, range.end - segmentStart);
-      if (to > from) {
-        out.push({
-          ...segment,
-          text: segment.text.slice(from, to),
-          char_start: Math.max(segment.char_start, range.start),
-          char_end: Math.min(segment.char_end, range.end),
-        });
-      }
-    }
-    return out;
-  }
-
   function isActive(row: number): boolean {
     return activeHunk !== null && row >= activeHunk.start && row < activeHunk.end;
   }
@@ -263,10 +230,8 @@
             </span>
           </button>
         {:else}
-          {@const row = rows[item.row]}
-          {@const line = side === "left" ? row.left : row.right}
-          {@const segs = side === "left" ? row.left_inline : row.right_inline}
-          {@const fullText = line !== null ? (lines[line] ?? "") : ""}
+          {@const line = side === "left" ? lineAt(rows, item.row, "left") : lineAt(rows, item.row, "right")}
+          {@const fullText = lineText(lines, line)}
           <!--
             A wrapped item shows only its own character slice of the logical line.
             Split-view items carry one range per side because each pane has its own
@@ -318,8 +283,8 @@
             <CodeLine
               {line}
               active={isActive(item.row)}
-              kind={row.kind}
-              segments={segmentsFor(segs, range, wrapped)}
+              kind={rows.kindAt(item.row)}
+              changed={changedSpansAt(rows, side, item.row, range.start, range.end)}
               text={range.text}
               {continued}
               {side}

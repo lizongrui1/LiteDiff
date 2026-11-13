@@ -3,15 +3,16 @@
    * One cell of one row: gutter number + code text.
    *
    * Three visual states, all mutually exclusive:
-   *  - a real line with optional intra-line pills (`segments` non-empty)
-   *  - a real line with no intra-line info (`segments` empty, whole row tinted)
+   *  - a real line with optional intra-line pills (`changed` non-empty)
+   *  - a real line with no intra-line info (`changed` empty, whole row tinted)
    *  - a hatched placeholder for a missing side (`line === null`)
    *
    * The component is intentionally dumb: no state, no events. Row height and
    * font size come from CSS custom properties so nothing here can drift out of
    * sync with the virtual scroller's arithmetic.
    */
-  import type { InlineSegment, RowKind } from "../lib/types";
+  import type { RowKind } from "../lib/types";
+  import type { ChangedSpan } from "../lib/diffView";
   import type { Token } from "../lib/syntax";
   import { rowTint } from "../lib/theme";
   import type { SearchSlice } from "../lib/search";
@@ -21,9 +22,12 @@
     /** 0-based line index, or null for a padded cell. */
     line: number | null;
     kind: RowKind;
-    /** Intra-line runs; empty means "no character-level info". */
-    segments: InlineSegment[];
-    /** Raw text, used when `segments` is empty. */
+    /**
+     * Character ranges the backend marked as changed, relative to `text`; empty
+     * means "no character-level info".
+     */
+    changed: ChangedSpan[];
+    /** Raw text for this cell (the visible slice when wrapped). */
     text: string;
     /** Gutter side, which also decides the tint hue. */
     side: "left" | "right";
@@ -52,7 +56,7 @@
      * Empty means "not highlighted" — plain text, an unrecognised language, or the
      * feature switched off. The renderer then behaves exactly as before.
      *
-     * Highlighting yields to character-level diffing: when `segments` is present the
+     * Highlighting yields to character-level diffing: when `changed` is present the
      * reader is comparing two nearly identical lines, and the pills that show *which
      * character* changed carry more information than colouring a keyword.
      */
@@ -62,7 +66,7 @@
   let {
     line,
     kind,
-    segments,
+    changed,
     text,
     side,
     active = false,
@@ -78,7 +82,7 @@
   // cell is an alignment placeholder, so colouring it would imply the old side has
   // an added line of its own.
   const tint = $derived(rowTint(kind, side, isPadded));
-  const pieces = $derived(buildCodePieces(text, segments, tokens, searchSlices));
+  const pieces = $derived(buildCodePieces(text, changed, tokens, searchSlices));
 </script>
 
 <div

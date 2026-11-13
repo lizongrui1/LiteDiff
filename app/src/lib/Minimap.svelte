@@ -26,6 +26,7 @@
 
   import type { DisplayItem } from "../lib/viewport";
   import { minimapScale } from "../lib/viewport";
+  import { KIND_EQUAL, KIND_INSERT } from "../lib/diffView";
   import { AutoHide } from "../lib/autoHide";
   import { metrics } from "../lib/theme";
   import { t } from "../lib/i18nStore";
@@ -39,7 +40,7 @@
      * not mean every row inside it changed — inferring from ranges painted whole
      * documents red. `kind` is per row and cannot lie.
      */
-    rowKinds: ("equal" | "modify" | "delete" | "insert")[];
+    rowKinds: Uint8Array;
     /** The flattened display list, in the order the panes render it. */
     items: DisplayItem[];
     /** Index into `items` of the first visible item. */
@@ -273,9 +274,9 @@
       const item = list[i];
       if (item.fold) isFold[i] = 1;
       const kind = rowKinds[item.row];
-      if (kind === undefined || kind === "equal") continue;
+      if (kind === undefined || kind === KIND_EQUAL) continue;
       isChange[i] = 1;
-      if (kind === "insert") isInsert[i] = 1;
+      if (kind === KIND_INSERT) isInsert[i] = 1;
     }
 
     // Change ticks: maximal runs of one kind become a single rectangle.

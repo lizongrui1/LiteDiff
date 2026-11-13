@@ -34,6 +34,8 @@
  * identifier that is not a keyword stays plain, which is always readable.
  */
 
+import type { LineIndex } from "./lines";
+
 /** What a span of text is. Drives one colour token each. */
 export type TokenKind =
   | "plain"
@@ -584,10 +586,44 @@ export interface TokenSource {
   get(lineIndex: number | null): Token[];
 }
 
-const tokenSourceCache = new WeakMap<
-  readonly string[],
-  Map<Language, TokenSource | null>
->();
+/**
+ * Per-document line states in two byte arrays.
+ *
+ * `LexState` has exactly two fields, so a 200,000-line file would otherwise retain
+ * 200,000 small objects just to answer "what state enters this line". Two typed
+ * arrays are ~400 KB and the state object is only rebuilt for the lines actually
+ * tokenised.
+ */
+interface LineStateTable {
+  block: Uint8Array;
+  delim: Uint8Array;
+  /** Delimiter strings, indexed by `delim[i] - 1`; `0` means `null`. */
+  table: string[];
+}
+
+function lineStateTable(lines: LineIndex, language: Language): LineStateTable {
+  const count = lines.length;
+  const block = new Uint8Array(count);
+  const delim = new Uint8Array(count);
+  const table: string[] = [];
+  let state = INITIAL_STATE;
+  for (let i = 0; i < count; i++) {
+    block[i] = state.blockComment ? 1 : 0;
+    const delimiter = state.stringDelimiter;
+    if (delimiter !== null) {
+      let code = table.indexOf(delimiter) + 1;
+      if (code === 0) {
+        table.push(delimiter);
+        code = table.length;
+      }
+      delim[i] = code;
+    }
+    state = highlightLine(lines.text(i), language, state).state;
+  }
+  return { block, delim, table };
+}
+
+const tokenSourceCache = new WeakMap<LineIndex, Map<Language, TokenSource | null>>();
 
 /**
  * Build a lazy token source for one side of a comparison.
@@ -597,7 +633,7 @@ const tokenSourceCache = new WeakMap<
  * scroll, a resize or a theme switch costs no tokenising.
  */
 export function createTokenSource(
-  lines: readonly string[],
+  lines: LineIndex,
   language: Language,
 ): TokenSource | null {
   let byLanguage = tokenSourceCache.get(lines);
@@ -612,7 +648,7 @@ export function createTokenSource(
     return null;
   }
 
-  const states = lineStates(lines, language);
+  const states = lineStateTable(lines, language);
   const memo = new Map<number, Token[]>();
 
   const source = {
@@ -620,7 +656,11 @@ export function createTokenSource(
       if (lineIndex === null || lineIndex < 0 || lineIndex >= lines.length) return [];
       const cached = memo.get(lineIndex);
       if (cached) return cached;
-      const tokens = highlightLine(lines[lineIndex], language, states[lineIndex]).tokens;
+      const code = states.delim[lineIndex];
+      const tokens = highlightLine(lines.text(lineIndex), language, {
+        blockComment: states.block[lineIndex] === 1,
+        stringDelimiter: code === 0 ? null : states.table[code - 1],
+      }).tokens;
       memo.set(lineIndex, tokens);
       return tokens;
     },

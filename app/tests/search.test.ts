@@ -10,15 +10,73 @@ import {
   unifiedDisplayIndexForHit,
 } from "../src/lib/search.ts";
 import { buildCodePieces } from "../src/lib/codeRender.ts";
-import type { AlignedRow } from "../src/lib/types.ts";
+import { decodeDiff, type DiffTable } from "../src/lib/diffView.ts";
+import { lineIndex, type LineIndex } from "../src/lib/lines.ts";
+import type { Hunk, RowKind } from "../src/lib/types.ts";
 import type { DisplayItem, UnifiedItem } from "../src/lib/viewport.ts";
 
-function row(
-  left: number | null,
-  right: number | null,
-  kind: AlignedRow["kind"],
-): AlignedRow {
-  return { left, right, kind, left_inline: [], right_inline: [] };
+/** One-row-wide diff table built from explicit (left, right, kind) rows. */
+function tableOf(...rows: Array<[number | null, number | null, RowKind]>): DiffTable {
+  const hunks: Hunk[] = [];
+  let rowStart = 0;
+  for (const [left, right, kind] of rows) {
+    if (kind === "equal") {
+      hunks.push({
+        equal: true,
+        left_start: left ?? 0,
+        left_len: 1,
+        right_start: right ?? 0,
+        right_len: 1,
+        row_start: rowStart,
+        row_len: 1,
+      });
+    } else if (kind === "modify") {
+      hunks.push({
+        equal: false,
+        left_start: left ?? 0,
+        left_len: 1,
+        right_start: right ?? 0,
+        right_len: 1,
+        row_start: rowStart,
+        row_len: 1,
+      });
+    } else if (kind === "delete") {
+      hunks.push({
+        equal: false,
+        left_start: left ?? 0,
+        left_len: 1,
+        right_start: 0,
+        right_len: 0,
+        row_start: rowStart,
+        row_len: 1,
+      });
+    } else {
+      hunks.push({
+        equal: false,
+        left_start: 0,
+        left_len: 0,
+        right_start: right ?? 0,
+        right_len: 1,
+        row_start: rowStart,
+        row_len: 1,
+      });
+    }
+    rowStart++;
+  }
+  return decodeDiff({
+    left_line_count: rows.length,
+    right_line_count: rows.length,
+    hunks,
+    stats: { added: 0, deleted: 0, modified: 0, unchanged: 0 },
+    approximate: false,
+    left_changed: [],
+    right_changed: [],
+  });
+}
+
+/** Line index for a list of line contents (joined the way the backend sends text). */
+function linesOf(texts: string[]): LineIndex {
+  return lineIndex(texts.join("\n"));
 }
 
 test("literal search is case-insensitive by default and supports case sensitivity", () => {
@@ -39,7 +97,7 @@ test("search treats regular-expression characters as literal text", () => {
 
 test("a single huge line stops allocating matches at the global cap", () => {
   const text = "a".repeat(MAX_SEARCH_HITS + 1_000);
-  const hits = findSearchHits([row(0, 0, "equal")], [text], [text], "a");
+  const hits = findSearchHits(tableOf([0, 0, "equal"]), linesOf([text]), linesOf([text]), "a");
   assert.equal(hits.length, MAX_SEARCH_HITS);
   assert.equal(hits.at(-1)?.start, MAX_SEARCH_HITS - 1);
   assert.equal(findTextMatches(text, "a").length, MAX_SEARCH_HITS);
@@ -47,9 +105,9 @@ test("a single huge line stops allocating matches at the global cap", () => {
 
 test("an equal row counts once and applies to both panes", () => {
   const hits = findSearchHits(
-    [row(0, 0, "equal")],
-    ["same text"],
-    ["same text"],
+    tableOf([0, 0, "equal"]),
+    linesOf(["same text"]),
+    linesOf(["same text"]),
     "text",
   );
   assert.deepEqual(hits, [{ row: 0, side: "both", start: 5, end: 9, line: 1 }]);
@@ -57,9 +115,9 @@ test("an equal row counts once and applies to both panes", () => {
 
 test("modified rows are searched on both sides", () => {
   const hits = findSearchHits(
-    [row(0, 0, "modify")],
-    ["left needle"],
-    ["right needle"],
+    tableOf([0, 0, "modify"]),
+    linesOf(["left needle"]),
+    linesOf(["right needle"]),
     "needle",
   );
   assert.deepEqual(hits, [
@@ -70,9 +128,9 @@ test("modified rows are searched on both sides", () => {
 
 test("row grouping preserves hit order", () => {
   const hits = findSearchHits(
-    [row(0, 0, "modify"), row(1, 1, "equal")],
-    ["a a", "zzz"],
-    ["a", "zzz"],
+    tableOf([0, 0, "modify"], [1, 1, "equal"]),
+    linesOf(["a a", "zzz"]),
+    linesOf(["a", "zzz"]),
     "a",
   );
   const grouped = groupSearchHits(hits);
@@ -89,7 +147,12 @@ test("row grouping preserves hit order", () => {
 });
 
 test("wrapped slices clip search hits and preserve their active state", () => {
-  const hits = findSearchHits([row(0, 0, "equal")], ["x needle y"], ["x needle y"], "needle");
+  const hits = findSearchHits(
+    tableOf([0, 0, "equal"]),
+    linesOf(["x needle y"]),
+    linesOf(["x needle y"]),
+    "needle",
+  );
   const slices = searchSlicesFor(hits, "right", 3, 10, hits[0]);
   assert.deepEqual(slices, [{ start: 0, end: 5, current: true }]);
 });
@@ -143,8 +206,8 @@ test("search navigation resolves the unified-view wrap slice containing the hit"
 test("code text remains exact when style spans do not match the wrapped slice", () => {
   const full = "4、选项不冗余（硬规则，优先级最高）";
   const slice = full.slice(22, 38);
-  const stale = [{ text: full, char_start: 0, char_end: full.length, changed: false }];
-  const pieces = buildCodePieces(slice, stale, []);
+  // A span that overruns the visible slice is clamped, never allowed to repeat text.
+  const pieces = buildCodePieces(slice, [{ start: 0, end: full.length }], []);
   assert.equal(pieces.map((piece) => piece.text).join(""), slice);
 });
 
@@ -152,11 +215,7 @@ test("valid inline styles and search highlights survive boundary splitting", () 
   const text = "left needle right";
   const pieces = buildCodePieces(
     text,
-    [
-      { text: "left ", char_start: 0, char_end: 5, changed: false },
-      { text: "needle", char_start: 5, char_end: 11, changed: true },
-      { text: " right", char_start: 11, char_end: 17, changed: false },
-    ],
+    [{ start: 5, end: 11 }],
     [],
     [{ start: 5, end: 11, current: true }],
   );

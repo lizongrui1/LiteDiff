@@ -60,7 +60,8 @@
     Side,
     SideName,
   } from "./lib/types";
-  import { splitLines } from "./lib/types";
+  import { lineIndex, lineText, EMPTY_LINES, type LineIndex } from "./lib/lines";
+  import { decodeDiff, lineAt, EMPTY_DIFF, type DiffTable } from "./lib/diffView";
   import { createTokenSource, detectLanguage } from "./lib/syntax";
   import { t, resolveLocale, setLocale } from "./lib/i18nStore";
   import TabStrip from "./lib/TabStrip.svelte";
@@ -111,12 +112,15 @@
    * renders the identical paste screen inside it.
    */
   const firstTab = createEmptyTab();
-  let tabs = $state<Tab[]>([firstTab]);
+  let tabs = $state.raw<Tab[]>([firstTab]);
   let activeId = $state<string | null>(firstTab.id);
   const activeTab = $derived(tabs.find((tab) => tab.id === activeId) ?? null);
   const session = $derived<Session | null>(activeTab?.session ?? null);
   let view: "split" | "unified" = $state("split");
-  let expanded = $state<Set<number>>(new Set());
+  /* Expanded hunk indices. Whole-set replacement only (see the writers below), so a
+   * raw Set avoids instrumenting every entry — "expand all" can hold one entry per
+   * hunk and Svelte would otherwise create a reactive source per entry. */
+  let expanded = $state.raw<Set<number>>(new Set());
   let scrollTop = $state(0);
   /** Scroll container of whichever view is showing, for viewport measurement. */
   let splitHost = $state<HTMLDivElement | null>(null);
@@ -273,17 +277,14 @@
 
   const themeMode = $derived<ThemeMode>(settings.theme);
 
-  const splitCache = new WeakMap<Side, string[]>();
-  function cachedLines(side: Side): string[] {
-    const cached = splitCache.get(side);
-    if (cached) return cached;
-    const lines = splitLines(side.text);
-    splitCache.set(side, lines);
-    return lines;
-  }
-
-  const leftLines = $derived(session ? cachedLines(session.left) : []);
-  const rightLines = $derived(session ? cachedLines(session.right) : []);
+  /*
+   * Line text is addressed through a lazy index: `splitLines` used to materialise
+   * one JS string per line for both sides (up to 200k each) and keep them for the
+   * whole comparison. `LineIndex` keeps one offset array and slices the lines the
+   * renderer/search/wrap pass actually asks for.
+   */
+  const leftLines: LineIndex = $derived(session ? lineIndex(session.left.text) : EMPTY_LINES);
+  const rightLines: LineIndex = $derived(session ? lineIndex(session.right.text) : EMPTY_LINES);
 
   /*
    * Language, per side.
@@ -318,7 +319,12 @@
   const leftTokens = $derived(createTokenSource(leftLines, leftLanguage));
   const rightTokens = $derived(createTokenSource(rightLines, rightLanguage));
 
-  const rows = $derived(session?.result.rows ?? []);
+  /*
+   * Compact diff decoded into typed arrays. The payload no longer carries a row
+   * grid; `decodeDiff` rebuilds it from the hunk list (same pairing rule as the
+   * Rust aligner), so the steady-state cost is bytes per row, not an object graph.
+   */
+  const diff: DiffTable = $derived(session ? decodeDiff(session.result) : EMPTY_DIFF);
 
   const hunks = $derived(session?.result.hunks ?? []);
 
@@ -335,7 +341,7 @@
   const unifiedBaseItems = $derived(
     buildUnifiedDisplay(
       hunks,
-      rows,
+      diff,
       settings.autoFold ? settings.foldThreshold : Infinity,
       expanded,
     ),
@@ -355,7 +361,7 @@
    */
   const searchHits: SearchHit[] = $derived(
     searchOpen && searchQuery.length > 0
-      ? findSearchHits(rows, leftLines, rightLines, searchQuery, searchCaseSensitive)
+      ? findSearchHits(diff, leftLines, rightLines, searchQuery, searchCaseSensitive)
       : [],
   );
   const searchHitsByRow = $derived(groupSearchHits(searchHits));
@@ -379,7 +385,7 @@
       stats.added === 0 &&
       stats.deleted === 0 &&
       stats.modified === 0 &&
-      rows.length > 0,
+      diff.length > 0,
   );
 
   /**
@@ -393,7 +399,7 @@
 
   const comparisonKey = $derived(
     session
-      ? `${session.left.text.length}:${session.right.text.length}:${rows.length}:${stats.added}:${stats.deleted}:${stats.modified}`
+      ? `${session.left.text.length}:${session.right.text.length}:${diff.length}:${stats.added}:${stats.deleted}:${stats.modified}`
       : "",
   );
 
@@ -432,29 +438,27 @@
 
   const items: DisplayItem[] = $derived(
     settings.wrapLines
-      ? expandSplitWrapped(baseItems, leftWrapWidth, rightWrapWidth, (row) => {
-          const r = rows[row];
-          if (!r || r.left === null) return "";
-          return leftLines[r.left] ?? "";
-        }, (row) => {
-          const r = rows[row];
-          if (!r || r.right === null) return "";
-          return rightLines[r.right] ?? "";
-        }, wrapMetrics)
+      ? expandSplitWrapped(
+          baseItems,
+          leftWrapWidth,
+          rightWrapWidth,
+          (row) => lineText(leftLines, lineAt(diff, row, "left")),
+          (row) => lineText(rightLines, lineAt(diff, row, "right")),
+          wrapMetrics)
       : baseItems,
   );
 
   const unifiedItems = $derived(
     settings.wrapLines
-      ? expandUnifiedWrapped(unifiedBaseItems, unifiedWrapWidth, (item) => {
-          if (item.fold !== null) return "";
-          const row = rows[item.sourceRow];
-          if (!row) return "";
-          const line = item.side === "left" ? row.left : row.right;
-          return line !== null
-            ? ((item.side === "left" ? leftLines : rightLines)[line] ?? "")
-            : "";
-        }, wrapMetrics)
+      ? expandUnifiedWrapped(
+          unifiedBaseItems,
+          unifiedWrapWidth,
+          (item) => {
+            if (item.fold !== null) return "";
+            const line = lineAt(diff, item.sourceRow, item.side);
+            return lineText(item.side === "left" ? leftLines : rightLines, line);
+          },
+          wrapMetrics)
       : unifiedBaseItems,
   );
 
@@ -546,7 +550,7 @@
    */
   const position = $derived.by(() => {
     if (changeHunks.length === 0) {
-      return { changeIndex: 0, changeTotal: 0, line: currentRow + 1, total: rows.length };
+      return { changeIndex: 0, changeTotal: 0, line: currentRow + 1, total: diff.length };
     }
 
     let idx = -1;
@@ -593,7 +597,7 @@
       changeIndex: idx + 1,
       changeTotal: changeHunks.length,
       line,
-      total: rows.length,
+      total: diff.length,
     };
   });
 
@@ -2253,7 +2257,7 @@
   -->
   {#if showSameBanner}
     <SameBanner
-      lines={rows.length}
+      lines={diff.length}
       ignoring={ignoringOptions}
       onDismiss={() => (dismissedFor = comparisonKey)}
     />
@@ -2342,7 +2346,7 @@
           <DiffPane
             side="left"
             lines={leftLines}
-            {rows}
+            rows={diff}
             {items}
             win={splitWin}
             {hovered}
@@ -2404,7 +2408,7 @@
           <DiffPane
             side="right"
             lines={rightLines}
-            {rows}
+            rows={diff}
             {items}
             win={splitWin}
             {hovered}
@@ -2428,7 +2432,7 @@
             is folded. `visibleItems` is the item range actually on screen.
           -->
           <Minimap
-            rowKinds={rows.map((r) => r.kind)}
+            rowKinds={diff.kind}
             {items}
             viewStart={visibleItems.start}
             {rowHeight}
@@ -2441,7 +2445,7 @@
     {:else}
       <div class="unified-host" bind:this={splitHost}>
         <UnifiedView
-          {rows}
+          rows={diff}
           items={unifiedItems}
           {leftLines}
           {rightLines}

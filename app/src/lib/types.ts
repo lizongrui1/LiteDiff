@@ -10,39 +10,19 @@
 /** Visual class of one side-by-side row. */
 export type RowKind = "equal" | "modify" | "delete" | "insert";
 
-/** A run of characters sharing one highlight state. */
-export interface InlineSegment {
-  text: string;
-  /** Char offset, inclusive. */
-  char_start: number;
-  /** Char offset, exclusive. */
-  char_end: number;
-  /** True for the high-saturation pill. */
-  changed: boolean;
-}
-
 /**
- * One aligned row. At most one side is null, and never both: the null side is
- * the hatched placeholder cell.
+ * A maximal run of aligned rows with the same equality state.
+ *
+ * The renderer derives the full row grid from these (see `lib/diffView.ts`), so
+ * they are the only row-structure data that crosses IPC.
  */
-export interface AlignedRow {
-  left: number | null;
-  right: number | null;
-  kind: RowKind;
-  /** Empty unless kind === "modify" and intra-line diffing is on. */
-  left_inline: InlineSegment[];
-  /** Empty unless kind === "modify" and intra-line diffing is on. */
-  right_inline: InlineSegment[];
-}
-
-/** A maximal run of rows with the same equality state. */
 export interface Hunk {
   equal: boolean;
   left_start: number;
   left_len: number;
   right_start: number;
   right_len: number;
-  /** First row index in `DiffResult.rows`. */
+  /** First row index in the derived row grid. */
   row_start: number;
   row_len: number;
 }
@@ -54,14 +34,25 @@ export interface DiffStats {
   unchanged: number;
 }
 
-export interface DiffResult {
+/**
+ * Diff payload as it crosses IPC.
+ *
+ * It deliberately carries **no rows array**: the aligned grid is a deterministic
+ * projection of `hunks` (pair `min(del, ins)` lines, pad the longer side), which
+ * the renderer rebuilds into typed arrays. `left_changed`/`right_changed` are flat
+ * `(row, start, end)` triples — UTF-16 code-unit offsets within the logical line —
+ * covering only the `modify` rows that have character-level highlights. The old
+ * per-row `AlignedRow` objects aren't needed to render anything.
+ */
+export interface WireDiff {
   left_line_count: number;
   right_line_count: number;
-  rows: AlignedRow[];
   hunks: Hunk[];
   stats: DiffStats;
   /** Search budget exhausted; the alignment is a coarse but deterministic fallback. */
   approximate: boolean;
+  left_changed: number[];
+  right_changed: number[];
 }
 
 export interface DiffOptions {
@@ -165,7 +156,7 @@ export interface GitSpec {
 export interface Session {
   left: Side;
   right: Side;
-  result: DiffResult;
+  result: WireDiff;
   options: DiffOptions;
   warnings: string[];
   /** Backend-computed document identity (options and diff result excluded). */
@@ -174,7 +165,7 @@ export interface Session {
 
 /** A backend diff update that omits unchanged source documents. */
 export interface SessionUpdate {
-  result: DiffResult;
+  result: WireDiff;
   options: DiffOptions;
   warnings: string[];
   contentKey: string;

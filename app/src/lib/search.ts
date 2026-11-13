@@ -1,4 +1,6 @@
-import type { AlignedRow } from "./types";
+import type { LineIndex } from "./lines";
+import { lineText } from "./lines";
+import { lineAt, type DiffTable } from "./diffView";
 import type { DisplayItem, UnifiedItem } from "./viewport";
 
 export type SearchSide = "left" | "right" | "both";
@@ -79,9 +81,9 @@ export function findTextMatches(
  * are searched independently because the two sides really are different text.
  */
 export function findSearchHits(
-  rows: readonly AlignedRow[],
-  leftLines: readonly string[],
-  rightLines: readonly string[],
+  rows: DiffTable,
+  leftLines: LineIndex,
+  rightLines: LineIndex,
   query: string,
   caseSensitive = false,
 ): SearchHit[] {
@@ -90,13 +92,12 @@ export function findSearchHits(
   const out: SearchHit[] = [];
   const pattern = new RegExp(escapeRegExp(query), caseSensitive ? "g" : "gi");
   for (let row = 0; row < rows.length; row++) {
-    const item = rows[row];
-    const leftLine = item.left;
-    const rightLine = item.right;
-    const leftText = leftLine === null ? "" : (leftLines[leftLine] ?? "");
-    const rightText = rightLine === null ? "" : (rightLines[rightLine] ?? "");
+    const leftLine = lineAt(rows, row, "left");
+    const rightLine = lineAt(rows, row, "right");
+    const leftText = lineText(leftLines, leftLine);
+    const rightText = lineText(rightLines, rightLine);
 
-    if (item.kind === "equal" && leftLine !== null && rightLine !== null && leftText === rightText) {
+    if (rows.kindAt(row) === "equal" && leftLine !== null && rightLine !== null && leftText === rightText) {
       forEachMatch(leftText, pattern, MAX_SEARCH_HITS - out.length, (start, end) => {
         out.push({ row, side: "both", start, end, line: leftLine + 1 });
       });
