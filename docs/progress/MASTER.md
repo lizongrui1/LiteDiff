@@ -33,14 +33,21 @@
 
 - macOS 15.8.1 arm64，Rust/Cargo 1.99.1，Node 26.0.0，npm 11.12.1。
 - `bash scripts/verify.sh` 通过：fmt、clippy、Rust tests、前端 tests、类型检查和生产构建全部成功。
-- Rust：138 个测试通过（74 app + 45 core + 18 engine + 1 doctest）。
-- 前端：330/330 测试通过，`svelte-check` 为 0 error / 0 warning。
+- Rust：167 个测试通过（88 app + 60 core + 18 engine + 1 doctest）。
+- 前端：373/373 测试通过，`svelte-check` 为 0 error / 0 warning。
 - macOS `.app` 打包冒烟通过，release 二进制构建成功，产出 9.0 MB 应用包。
 - Skill validator、`bash -n`、`git diff --check` 和 68 个 Markdown 相对链接检查通过。
 - 敏感信息、私钥文件名和本机绝对路径扫描无命中；GitHub Actions YAML 与 Shell 脚本语法检查通过。
 - 当前主机没有 PowerShell，`scripts/verify.ps1` 仅完成静态审查，实跑标记为 `NOT RUN`。
 
-完整证据见 [`specs/changes/0001-adopt-sdd/verification.md`](../../specs/changes/0001-adopt-sdd/verification.md)。
+- 0003 运行时内存优化已合并（PR #3，`ec632d1`）：同一 diff 的 IPC payload 由 15.95 MiB 降至 0.24 MiB，
+  渲染进程保留堆 26.74 MiB 降至 1.93 MiB，后端峰值 RSS 112.0 MiB 降至 67.2 MiB。
+  新增可重复内存基准 [`scripts/bench-memory.sh`](../../scripts/bench-memory.sh) 与
+  [`scripts/frontend-memory-bench.mjs`](../../scripts/frontend-memory-bench.mjs)，数字见
+  [`specs/changes/0003-lower-runtime-memory/benchmarks.md`](../../specs/changes/0003-lower-runtime-memory/benchmarks.md)。
+
+完整证据见 [`specs/changes/0001-adopt-sdd/verification.md`](../../specs/changes/0001-adopt-sdd/verification.md)，
+0003 的逐条验收证据见 [`specs/changes/0003-lower-runtime-memory/verification.md`](../../specs/changes/0003-lower-runtime-memory/verification.md)。
 
 ## 后续建议
 
